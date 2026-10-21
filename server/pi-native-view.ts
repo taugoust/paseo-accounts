@@ -42,6 +42,14 @@ type StoredProfiles = {
 	companionCredential?: PiQuotaCredential;
 	companionUsageEnabled?: boolean;
 };
+function quotaPlanLabel(result: QuotaResult): string | null {
+	if (!result.plan) return null;
+	if (result.source !== "codex-companion") return result.plan;
+	return result.identityVerified === false
+		? `Codex companion (identity unverified) · ${result.plan}`
+		: `Codex companion · ${result.plan}`;
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -166,6 +174,7 @@ export class NativePiAccounts {
 						? [companion.access, companion.accountId]
 						: companion?.kind,
 					companionUsageEnabled,
+					id === "pi-native:default",
 				]),
 			)
 			.digest("hex");
@@ -185,6 +194,7 @@ export class NativePiAccounts {
 			credential,
 			companion,
 			companionUsageEnabled,
+			id === "pi-native:default",
 		);
 		this.quotaCache.set(id, { fingerprint, at: Date.now(), result });
 		return result;
@@ -328,7 +338,7 @@ export class NativePiAccounts {
 				label: "Default Pi login",
 				kind: "main",
 				email: null,
-				plan: defaultQuota.plan,
+				plan: quotaPlanLabel(defaultQuota),
 				organization: null,
 				status: "ready",
 				isDefault: stored.active === null,
@@ -347,7 +357,9 @@ export class NativePiAccounts {
 				label: profile.label,
 				kind: "managed" as const,
 				email: null,
-				plan: quotaById.get(profile.id)?.plan ?? null,
+				plan: quotaPlanLabel(
+					quotaById.get(profile.id) ?? { usage: null, plan: null },
+				),
 				organization: null,
 				status: "ready" as const,
 				isDefault: profile.isDefault,

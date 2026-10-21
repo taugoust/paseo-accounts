@@ -22,7 +22,12 @@ export type QuotaAuthData = {
 	companionUsageEnabled: boolean;
 };
 
-export type QuotaResult = { usage: Usage | null; plan: string | null };
+export type QuotaResult = {
+	usage: Usage | null;
+	plan: string | null;
+	source?: "openai" | "codex-companion";
+	identityVerified?: boolean;
+};
 
 function record(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -296,13 +301,15 @@ function mapQuota(body: Record<string, unknown>): QuotaResult {
 			typeof body.plan_type === "string"
 				? quotaText(body.plan_type, "ChatGPT")
 				: null,
+		source: "openai",
 	};
 }
 
 async function fetchCompanionQuota(
 	native: Extract<PiQuotaCredential, { kind: "oauth" }>,
 	companion: Extract<PiQuotaCredential, { kind: "oauth" }>,
-	nativeAccountId: string,
+	nativeAccountId: string | undefined,
+	allowUnverifiedIdentity: boolean,
 ): Promise<QuotaResult> {
 	const companionClaim = accountIdFromAccess(companion.access);
 	if (
@@ -317,7 +324,11 @@ async function fetchCompanionQuota(
 			plan: null,
 		};
 	const companionAccountId = companion.accountId ?? companionClaim;
-	if (!companionAccountId || companionAccountId !== nativeAccountId)
+	if (
+		!companionAccountId ||
+		(nativeAccountId !== undefined && companionAccountId !== nativeAccountId) ||
+		(nativeAccountId === undefined && !allowUnverifiedIdentity)
+	)
 		return {
 			usage: usageError(
 				"OpenAI and Codex logins do not match; quota was not attributed.",
@@ -375,7 +386,11 @@ async function fetchCompanionQuota(
 			),
 			plan: null,
 		};
-	return mapQuota(await chatgptJson(companion.access, companionAccountId));
+	return {
+		...mapQuota(await chatgptJson(companion.access, companionAccountId)),
+		source: "codex-companion",
+		identityVerified: nativeAccountId === companionAccountId,
+	};
 }
 
 function accountIdFromAccess(access: string): string | undefined {
@@ -396,6 +411,7 @@ export async function fetchPiQuota(
 	credential: PiQuotaCredential | undefined,
 	companionCredential?: PiQuotaCredential,
 	companionUsageEnabled = false,
+	allowUnverifiedCompanionIdentity = false,
 ): Promise<QuotaResult> {
 	if (!credential) return { usage: null, plan: null };
 	if (credential.kind === "api-key")
@@ -414,13 +430,6 @@ export async function fetchPiQuota(
 		};
 	const accountId =
 		credential.accountId ?? accountIdFromAccess(credential.access);
-	if (!accountId)
-		return {
-			usage: usageError(
-				"ChatGPT account identity is unavailable for this profile.",
-			),
-			plan: null,
-		};
 	try {
 		if (
 			credential.clientId &&
@@ -446,8 +455,16 @@ export async function fetchPiQuota(
 				credential,
 				companionCredential,
 				accountId,
+				allowUnverifiedCompanionIdentity,
 			);
 		}
+		if (!accountId)
+			return {
+				usage: usageError(
+					"ChatGPT account identity is unavailable for this profile.",
+				),
+				plan: null,
+			};
 		return mapQuota(await chatgptJson(credential.access, accountId));
 	} catch (error) {
 		return {
