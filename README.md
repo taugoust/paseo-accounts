@@ -1,5 +1,25 @@
 # Paseo Accounts
 
+## Native Pi integration in this fork
+
+This fork connects native OpenAI accounts in **live Pi sessions** to the existing
+`pi-accounts` backend through paseo-bridge-pi's private account-controls API.
+It does not copy credentials, create Pi credential homes, rewrite Pi's environment,
+reload Pi, or automatically fail over Pi sessions. Automatic switching defaults off.
+
+The first pass provides account cards and explicit per-agent switching while Pi is
+idle. Profiles remain in Pi's canonical store; views are scoped to their live session
+and requests check workspace, session, service epoch and selection revision. The
+built-in Pi login is an explicit choice, not a fallback for failed activation.
+
+**Still pending:** in-app Pi account addition/sign-in/removal, host-wide aggregation
+without a live Pi session, and quota data in these account cards. Use terminal
+`/accounts` for management for now; the existing context usage display remains.
+Other providers retain the upstream adapters described below. This is a first-pass
+integration, not full parity with the upstream Pi account-home implementation.
+
+---
+
 Use several Claude, ChatGPT (Codex), GitHub Copilot, Kimi Code, OpenCode Go, Pi and Oh My Pi subscriptions side by side in [Paseo](https://paseo.sh), without logging in and out of the CLI.
 
 ![Paseo Accounts](images/accounts-dark.png)
