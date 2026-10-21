@@ -77,11 +77,15 @@ function safeQuotaAccountId(value: unknown): string | undefined {
 		: undefined;
 }
 
-function quotaCredential(value: unknown): PiQuotaCredential | undefined {
+function quotaCredential(
+	value: unknown,
+	allowDefaultAuthTypeOmission = false,
+): PiQuotaCredential | undefined {
 	const credential = record(value);
 	if (credential?.type === "api_key") return { kind: "api-key" };
 	if (
-		credential?.type !== "oauth" ||
+		(credential?.type !== "oauth" &&
+			!(allowDefaultAuthTypeOmission && credential?.type === undefined)) ||
 		typeof credential.access !== "string" ||
 		credential.access.length === 0 ||
 		credential.access.length > 65_536 ||
@@ -181,7 +185,7 @@ async function readDefaultQuotaCredential(
 			)
 				return undefined;
 			const parsed = JSON.parse(await handle.readFile("utf8"));
-			return quotaCredential(record(parsed)?.openai);
+			return quotaCredential(record(parsed)?.openai, true);
 		} finally {
 			await handle.close();
 		}
