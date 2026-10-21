@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
 	PluginServerContext,
 	PluginSettingsState,
@@ -10,7 +11,12 @@ import { KimiAdapter } from "./server/kimi";
 import { OmpAdapter } from "./server/omp";
 import { OpenCodeAdapter } from "./server/opencode";
 import { PiAdapter } from "./server/pi";
-import { NativePiAccounts, refusePiManagement } from "./server/pi-native-view";
+import {
+	isNativePiAccount,
+	NativePiAccounts,
+	refusePiManagement,
+} from "./server/pi-native-view";
+import { piAccountManageRpc } from "./shared/pi-native";
 import { Service, describe } from "./server/service";
 import { preferences } from "./shared/preferences";
 import {
@@ -120,9 +126,44 @@ export default function contribute(server: PluginServerContext) {
 			};
 		}
 	});
-	server.handle(startLogin, ({ family, method, accountId }) => {
-		if (family === "pi")
-			throw new Error("Add Pi accounts with /accounts in Pi for now.");
+	server.handle(piAccountManageRpc, async (input, context) => {
+		const result = await nativePi.manage(input, context);
+		return {
+			ok: true as const,
+			...(typeof result?.accountId === "string"
+				? { accountId: result.accountId }
+				: {}),
+		};
+	});
+	server.handle(startLogin, async ({ family, method, accountId }, context) => {
+		if (family === "pi") {
+			const name = accountId?.startsWith("pi-native:profile:")
+				? decodeURIComponent(accountId.slice("pi-native:profile:".length))
+				: undefined;
+			const result = await nativePi.manage(
+				{
+					operation: "add",
+					...(name ? { accountName: name } : {}),
+					method: "oauth",
+				},
+				context,
+			);
+			return {
+				id: randomUUID(),
+				family: "pi",
+				method,
+				accountId:
+					typeof result?.accountId === "string"
+						? `pi-native:profile:${encodeURIComponent(result.accountId)}`
+						: null,
+				step: "done",
+				url: null,
+				codeUrl: null,
+				userCode: null,
+				message: null,
+				startedAt: new Date().toISOString(),
+			};
+		}
 		if (accountId) refusePiManagement(accountId);
 		return service.startLogin(family, method, accountId);
 	});
@@ -130,13 +171,37 @@ export default function contribute(server: PluginServerContext) {
 		service.submitCode(loginId, code),
 	);
 	server.handle(cancelLogin, ({ loginId }) => service.cancelLogin(loginId));
-	server.handle(renameAccount, async ({ accountId, label }) => {
-		refusePiManagement(accountId);
+	server.handle(renameAccount, async ({ accountId, label }, context) => {
+		if (isNativePiAccount(accountId)) {
+			await nativePi.manage(
+				{
+					operation: "rename",
+					accountId: decodeURIComponent(
+						accountId.slice("pi-native:profile:".length),
+					),
+					label,
+				},
+				context,
+			);
+			return { ok: true as const };
+		}
 		await service.rename(accountId, label);
 		return { ok: true as const };
 	});
-	server.handle(removeAccount, async ({ accountId }, { paseo }) => {
-		refusePiManagement(accountId);
+	server.handle(removeAccount, async ({ accountId }, context) => {
+		if (isNativePiAccount(accountId)) {
+			await nativePi.manage(
+				{
+					operation: "remove",
+					accountId: decodeURIComponent(
+						accountId.slice("pi-native:profile:".length),
+					),
+				},
+				context,
+			);
+			return { ok: true as const, movedAgents: 0 };
+		}
+		const { paseo } = context;
 		return {
 			ok: true as const,
 			movedAgents: await service.remove(paseo, accountId),
@@ -149,9 +214,23 @@ export default function contribute(server: PluginServerContext) {
 			movedAgents: await service.signOut(paseo, accountId),
 		};
 	});
-	server.handle(setDefaultAccount, ({ accountId }, { paseo }) => {
-		refusePiManagement(accountId);
-		return service.setDefault(paseo, accountId);
+	server.handle(setDefaultAccount, async ({ accountId }, context) => {
+		if (isNativePiAccount(accountId)) {
+			await nativePi.manage(
+				{
+					operation: "default",
+					accountId:
+						accountId === "pi-native:default"
+							? null
+							: decodeURIComponent(
+									accountId.slice("pi-native:profile:".length),
+								),
+				},
+				context,
+			);
+			return { reopened: [], deferred: [], failed: [], continuedIn: null };
+		}
+		return service.setDefault(context.paseo, accountId);
 	});
 	server.handle(clearAccountLimit, async ({ accountId }) => {
 		refusePiManagement(accountId);

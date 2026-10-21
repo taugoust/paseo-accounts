@@ -55,9 +55,7 @@ export function contributeCommands(
 					return;
 				}
 				const accounts = state.accounts.filter(
-					(account) =>
-						account.family === family &&
-						(family !== "pi" || account.ownerAgentId === agent.id),
+					(account) => account.family === family,
 				);
 				if (/^default$/i.test(query)) {
 					await store.rpc(setAgentAccount, {

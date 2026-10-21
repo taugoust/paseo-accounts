@@ -196,6 +196,58 @@ export function createAccountControlsHandlers() {
 			);
 	}
 	return {
+		manage: async (
+			request: Record<string, unknown>,
+			context: PluginHandlerContext,
+		) => {
+			const agents = await context.paseo.agents.list({ page: { limit: 200 } });
+			const candidates = agents.entries
+				.map(({ agent }) => agent)
+				.filter(
+					(agent) =>
+						agent.provider === "pi" &&
+						!agent.archivedAt &&
+						!(["running", "initializing", "closed"] as string[]).includes(
+							agent.status,
+						) &&
+						!!agent.workspaceId,
+				);
+			let lastError = "No idle Pi session is available to manage accounts.";
+			for (const agent of candidates) {
+				await validate(
+					{ agentId: agent.id, workspaceId: agent.workspaceId! },
+					context,
+				);
+				const d = await readDescriptor(agent.id);
+				if (!validDescriptor(d, agent.id)) continue;
+				try {
+					const result = await callBridge(
+						d,
+						{
+							operation: "manage",
+							request: { ...request, sessionId: d.sessionId },
+						},
+						15 * 60_000,
+					);
+					await validate(
+						{ agentId: agent.id, workspaceId: agent.workspaceId! },
+						context,
+					);
+					const latest = await readDescriptor(agent.id);
+					if (
+						!validDescriptor(latest, agent.id) ||
+						latest.sessionId !== d.sessionId ||
+						latest.runtimeEpoch !== d.runtimeEpoch ||
+						latest.serviceEpoch !== d.serviceEpoch
+					)
+						throw new Error("Pi account service changed during management.");
+					return result;
+				} catch (error) {
+					lastError = error instanceof Error ? error.message : String(error);
+				}
+			}
+			throw new Error(lastError);
+		},
 		status: async (
 			input: RpcInput<typeof accountControlsStatusRpc>,
 			context: PluginHandlerContext,

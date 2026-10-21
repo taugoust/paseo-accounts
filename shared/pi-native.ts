@@ -29,6 +29,7 @@ export const piSnapshotSchema = z
 		]),
 		busy: z.boolean(),
 		canSwitch: z.boolean(),
+		pendingAccountNames: z.array(z.string().min(1).max(64)).max(20).optional(),
 		usage: z
 			.object({
 				effectiveCredential: z.enum([
@@ -119,5 +120,18 @@ export const accountControlsSwitchRpc = defineRpc({
 		})
 		.strict(),
 	output: piSwitchResultSchema,
+});
+export const piAccountManageRpc = defineRpc({
+	name: "paseo-accounts.pi.manage",
+	input: z.object({
+		operation: z.enum(["add", "cancel-login", "rename", "remove", "default"]),
+		accountId: z.string().min(1).max(64).nullable().optional(),
+		accountName: z.string().trim().max(64).optional(),
+		label: z.string().trim().max(40).optional(),
+		method: z.enum(["oauth", "api_key"]).optional(),
+	}),
+	output: z
+		.object({ ok: z.literal(true), accountId: z.string().optional() })
+		.strict(),
 });
 export type PiNativeSnapshot = z.infer<typeof piSnapshotSchema>;

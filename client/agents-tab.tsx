@@ -233,9 +233,7 @@ function MoveModal({
 	const colors = theme.colors;
 	const [saving, setSaving] = useState<string | null>(null);
 	const accounts = state.accounts.filter(
-		(account) =>
-			account.family === agent.family &&
-			(agent.family !== "pi" || account.ownerAgentId === agent.agentId),
+		(account) => account.family === agent.family,
 	);
 	const choose = async (accountId: string | null) => {
 		setSaving(accountId ?? "default");

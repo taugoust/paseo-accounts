@@ -447,7 +447,7 @@ function AccountDetail({
 			) : null}
 
 			<View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-				{!piAccount && signedOut ? (
+				{signedOut ? (
 					<Button
 						theme={theme}
 						size="small"
@@ -478,7 +478,7 @@ function AccountDetail({
 						onPress={() => setConfirmReset(true)}
 					/>
 				) : null}
-				{!piAccount && !account.isDefault && !signedOut && !disabled ? (
+				{!account.isDefault && !signedOut && !disabled ? (
 					<Button
 						theme={theme}
 						size="small"
@@ -507,7 +507,7 @@ function AccountDetail({
 						onPress={() => void toggle()}
 					/>
 				) : null}
-				{!piAccount ? (
+				{!piAccount || account.kind !== "main" ? (
 					<Button
 						theme={theme}
 						size="small"
@@ -526,7 +526,7 @@ function AccountDetail({
 						onPress={() => setConfirmSignOut(true)}
 					/>
 				) : null}
-				{!piAccount && account.kind !== "main" ? (
+				{account.kind !== "main" ? (
 					<Button
 						theme={theme}
 						size="small"
@@ -612,9 +612,11 @@ function AccountDetail({
 			>
 				<Modal.Content>
 					<Text style={text.body}>
-						{account.family !== "codex"
-							? "This signs the account out on this machine and deletes its saved login. Agents using it move to the default account; their conversations are kept."
-							: "This signs the account out on this machine and deletes its saved login. New agents use the default account. Existing ChatGPT conversations on it can't move, so start new agents for them."}
+						{piAccount
+							? "This permanently removes the profile from Pi’s canonical account store. Switch live Pi sessions away first. Sessions that are offline may fail closed when resumed and will need a new account selection."
+							: account.family !== "codex"
+								? "This signs the account out on this machine and deletes its saved login. Agents using it move to the default account; their conversations are kept."
+								: "This signs the account out on this machine and deletes its saved login. New agents use the default account. Existing ChatGPT conversations on it can't move, so start new agents for them."}
 					</Text>
 					<View
 						style={{ flexDirection: "row", gap: 8, justifyContent: "flex-end" }}

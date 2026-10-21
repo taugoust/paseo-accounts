@@ -2,23 +2,11 @@
 
 ## Native Pi integration in this fork
 
-This fork connects native OpenAI accounts in **live Pi sessions** to the existing
-`pi-accounts` backend through paseo-bridge-pi's private account-controls API.
-It does not copy credentials, create Pi credential homes, rewrite Pi's environment,
-reload Pi, or automatically fail over Pi sessions. Automatic switching defaults off.
+Pi OpenAI profiles are managed in Pi's canonical `pi-accounts.json`; this plugin never copies credential values into paseo-accounts state or creates per-account `PI_CODING_AGENT_DIR` homes. Paseo's Accounts screen reads safe account labels and default state from that store. Add/sign-in, API-key entry, rename, remove and default changes are sent over the private capability-protected account-control socket to the installed `pi-accounts` extension. OAuth uses Pi's own provider login and UI prompt flow. Per-agent selection is applied by that extension to the live session while idle; it does not reload the process, mutate launch environment, or silently fail over. Automatic switching for Pi is disabled.
 
-The first pass provides account cards and explicit per-agent switching while Pi is
-idle. Profiles remain in Pi's canonical store; views are scoped to their live session
-and requests check workspace, session, service epoch and selection revision. The
-built-in Pi login is an explicit choice, not a fallback for failed activation.
+Sensitive operations use the current session/service epoch and workspace identity. Snapshots include names/status only; raw credential data stays in the private Pi store and never enters Paseo client state. Removing a profile refuses when a reachable live session currently uses it. Sessions without a bridge are surfaced in a warning; removal carries an explicit warning that an offline conversation may fail closed when it resumes.
 
-**Still pending:** in-app Pi account addition/sign-in/removal, host-wide aggregation
-without a live Pi session, and quota data in these account cards. Use terminal
-`/accounts` for management for now; the existing context usage display remains.
-Other providers retain the upstream adapters described below. This is a first-pass
-integration, not full parity with the upstream Pi account-home implementation.
-
----
+Claude Code, Codex, Copilot and other upstream adapters retain their own backends. Pi usage remains in Paseo's native context/usage display, not fabricated as account quota.
 
 Use several Claude, ChatGPT (Codex), GitHub Copilot, Kimi Code, OpenCode Go, Pi and Oh My Pi subscriptions side by side in [Paseo](https://paseo.sh), without logging in and out of the CLI.
 

@@ -193,8 +193,7 @@ function buttonFor(
 	const route = state.agents.find((entry) => entry.agentId === agent.id);
 	const isPi = family === "pi";
 	const accounts = state.accounts.filter(
-		(account) =>
-			account.family === family && (!isPi || account.ownerAgentId === agent.id),
+		(account) => account.family === family,
 	);
 	if (isPi && !route) return null;
 	const current =
