@@ -56,7 +56,9 @@ function accountIdClaim(access: string): string | undefined {
 		const claims = JSON.parse(
 			Buffer.from(access.split(".")[1] ?? "", "base64url").toString("utf8"),
 		);
-		const value = claims?.["https://api.openai.com/auth"]?.chatgpt_account_id;
+		const value =
+			claims?.["https://api.openai.com/auth"]?.chatgpt_account_id ??
+			claims?.chatgpt_account_id;
 		return typeof value === "string" &&
 			value.length > 0 &&
 			value.length <= 256 &&
