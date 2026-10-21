@@ -11,6 +11,8 @@ import type {
 	Usage,
 } from "../shared/model";
 import { createAccountControlsHandlers } from "./pi-native";
+import { fetchPiQuota, readQuotaAuthData } from "./pi-quota";
+import type { PiQuotaCredential, QuotaResult } from "./pi-quota";
 
 const PREFIX = "pi-native:";
 const accountId = (name: string | null) =>
@@ -25,9 +27,6 @@ export function refusePiManagement(id: string) {
 		);
 }
 
-type PiQuotaCredential =
-	| { kind: "oauth"; access: string; expires: number; accountId?: string }
-	| { kind: "api-key" };
 type StoredProfile = {
 	id: string;
 	label: string;
@@ -40,290 +39,15 @@ type StoredProfiles = {
 	profiles: StoredProfile[];
 	active: string | null;
 	defaultCredential?: PiQuotaCredential;
+	companionCredential?: PiQuotaCredential;
+	companionUsageEnabled?: boolean;
 };
-type QuotaResult = { usage: Usage | null; plan: string | null };
-const MAX_QUOTA_RESPONSE_BYTES = 256 * 1024;
-const QUOTA_CACHE_MS = 60_000;
-
 function record(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: undefined;
 }
 
-function accountIdClaim(access: string): string | undefined {
-	try {
-		const claims = JSON.parse(
-			Buffer.from(access.split(".")[1] ?? "", "base64url").toString("utf8"),
-		);
-		const value =
-			claims?.["https://api.openai.com/auth"]?.chatgpt_account_id ??
-			claims?.chatgpt_account_id;
-		return typeof value === "string" &&
-			value.length > 0 &&
-			value.length <= 256 &&
-			!/[\p{Cc}\p{Cf}]/u.test(value)
-			? value
-			: undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function safeQuotaAccountId(value: unknown): string | undefined {
-	return typeof value === "string" &&
-		value.length > 0 &&
-		value.length <= 256 &&
-		!/[\p{Cc}\p{Cf}]/u.test(value)
-		? value
-		: undefined;
-}
-
-function quotaCredential(
-	value: unknown,
-	allowDefaultAuthTypeOmission = false,
-): PiQuotaCredential | undefined {
-	const credential = record(value);
-	if (credential?.type === "api_key") return { kind: "api-key" };
-	if (
-		(credential?.type !== "oauth" &&
-			!(allowDefaultAuthTypeOmission && credential?.type === undefined)) ||
-		typeof credential.access !== "string" ||
-		credential.access.length === 0 ||
-		credential.access.length > 65_536 ||
-		typeof credential.expires !== "number" ||
-		!Number.isFinite(credential.expires)
-	)
-		return undefined;
-	const accountId =
-		safeQuotaAccountId(credential.accountId) ??
-		accountIdClaim(credential.access);
-	return {
-		kind: "oauth",
-		access: credential.access,
-		expires: credential.expires,
-		...(accountId ? { accountId } : {}),
-	};
-}
-
-function quotaText(value: unknown, fallback: string): string {
-	return typeof value === "string" &&
-		value.trim().length > 0 &&
-		value.length <= 128 &&
-		!/[\p{Cc}\p{Cf}]/u.test(value)
-		? value.trim()
-		: fallback;
-}
-
-function usageError(message: string): Usage {
-	return {
-		fetchedAt: new Date().toISOString(),
-		windows: [],
-		error: message,
-		cached: false,
-		resets: null,
-	};
-}
-
-function usageWindow(
-	value: unknown,
-	id: string,
-	label: string,
-): Usage["windows"][number] | null {
-	const row = record(value);
-	const usedPercent = row?.used_percent;
-	const resetAt = row?.reset_at;
-	if (
-		typeof usedPercent !== "number" ||
-		!Number.isFinite(usedPercent) ||
-		usedPercent < 0 ||
-		usedPercent > 100
-	)
-		return null;
-	return {
-		id,
-		label,
-		usedPercent,
-		resetsAt:
-			typeof resetAt === "number" &&
-			Number.isFinite(resetAt) &&
-			resetAt >= 0 &&
-			resetAt <= 8_640_000_000_000
-				? new Date(resetAt * 1000).toISOString()
-				: null,
-	};
-}
-
-function windowLabel(value: unknown, fallback: string): string {
-	const duration = record(value)?.limit_window_seconds;
-	if (
-		typeof duration !== "number" ||
-		!Number.isSafeInteger(duration) ||
-		duration <= 0
-	)
-		return fallback;
-	if (duration === 604800) return "7-day";
-	if (duration % 86400 === 0) return `${duration / 86400}-day`;
-	if (duration % 3600 === 0) return `${duration / 3600}-hour`;
-	return fallback;
-}
-
-async function readDefaultQuotaCredential(
-	directory: string,
-): Promise<PiQuotaCredential | undefined> {
-	try {
-		const handle = await open(
-			join(directory, "auth.json"),
-			constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-		);
-		try {
-			const stat = await handle.stat();
-			if (
-				!stat.isFile() ||
-				(typeof process.getuid === "function" &&
-					stat.uid !== process.getuid()) ||
-				(stat.mode & 0o777) !== 0o600 ||
-				stat.size > 2 * 1024 * 1024
-			)
-				return undefined;
-			const parsed = JSON.parse(await handle.readFile("utf8"));
-			return quotaCredential(record(parsed)?.openai, true);
-		} finally {
-			await handle.close();
-		}
-	} catch {
-		return undefined;
-	}
-}
-
-async function fetchPiQuota(
-	credential: PiQuotaCredential | undefined,
-): Promise<QuotaResult> {
-	if (!credential) return { usage: null, plan: null };
-	if (credential.kind === "api-key")
-		return {
-			usage: usageError(
-				"OpenAI does not expose ChatGPT quota windows for API-key profiles.",
-			),
-			plan: null,
-		};
-	if (credential.expires <= Date.now())
-		return {
-			usage: usageError(
-				"ChatGPT login expired; sign in again in Pi to refresh quota.",
-			),
-			plan: null,
-		};
-	if (!credential.accountId)
-		return {
-			usage: usageError(
-				"ChatGPT account identity is unavailable for this profile.",
-			),
-			plan: null,
-		};
-	try {
-		const response = await fetch("https://chatgpt.com/backend-api/wham/usage", {
-			headers: {
-				Authorization: `Bearer ${credential.access}`,
-				"ChatGPT-Account-Id": credential.accountId,
-				Accept: "application/json",
-				"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-			},
-			redirect: "error",
-			signal: AbortSignal.timeout(8_000),
-		});
-		if (!response.ok) {
-			await response.body?.cancel().catch(() => {});
-			return {
-				usage: usageError(
-					response.status === 401 || response.status === 403
-						? "ChatGPT rejected this saved login; sign in again in Pi."
-						: "OpenAI quota is temporarily unavailable.",
-				),
-				plan: null,
-			};
-		}
-		const reader = response.body?.getReader();
-		if (!reader)
-			return {
-				usage: usageError("OpenAI returned no quota data."),
-				plan: null,
-			};
-		const chunks: Uint8Array[] = [];
-		let size = 0;
-		try {
-			while (true) {
-				const chunk = await reader.read();
-				if (chunk.done) break;
-				size += chunk.value.length;
-				if (size > MAX_QUOTA_RESPONSE_BYTES)
-					throw new Error("quota response too large");
-				chunks.push(chunk.value);
-			}
-		} finally {
-			await reader.cancel().catch(() => {});
-		}
-		const body = record(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-		const rate = record(body?.rate_limit);
-		const windows: Usage["windows"] = [];
-		for (const [slot, fallback] of [
-			["primary_window", "Primary"],
-			["secondary_window", "Secondary"],
-		] as const) {
-			const source = rate?.[slot];
-			const mapped = usageWindow(source, slot, windowLabel(source, fallback));
-			if (mapped) windows.push(mapped);
-		}
-		const additional = Array.isArray(body?.additional_rate_limits)
-			? body.additional_rate_limits.slice(0, 100)
-			: [];
-		for (const [index, item] of additional.entries()) {
-			const row = record(item);
-			const identity = quotaText(
-				row?.limit_name ?? row?.metered_feature,
-				`Additional ${index + 1}`,
-			);
-			const limits = record(row?.rate_limit);
-			for (const [slot, fallback] of [
-				["primary_window", "Primary"],
-				["secondary_window", "Secondary"],
-			] as const) {
-				const source = limits?.[slot];
-				const mapped = usageWindow(
-					source,
-					`additional:${index}:${slot}`,
-					`${identity} · ${windowLabel(source, fallback)}`,
-				);
-				if (mapped) windows.push(mapped);
-			}
-		}
-		if (!windows.length)
-			return {
-				usage: usageError(
-					"The selected ChatGPT profile returned no quota windows.",
-				),
-				plan: null,
-			};
-		return {
-			usage: {
-				fetchedAt: new Date().toISOString(),
-				windows,
-				error: null,
-				cached: false,
-				resets: null,
-			},
-			plan:
-				typeof body?.plan_type === "string"
-					? quotaText(body.plan_type, "ChatGPT")
-					: null,
-		};
-	} catch {
-		return {
-			usage: usageError("OpenAI quota is temporarily unavailable."),
-			plan: null,
-		};
-	}
-}
 /** Read canonical profiles; OAuth tokens stay server-side and are never serialized to the UI. */
 async function readCanonicalProfiles(): Promise<StoredProfiles> {
 	const directory =
@@ -337,7 +61,7 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
 			(typeof process.getuid === "function" && dir.uid !== process.getuid())
 		)
 			return { profiles: [], active: null };
-		const defaultCredential = await readDefaultQuotaCredential(directory);
+		const quotaAuth = await readQuotaAuthData(directory);
 		let handle: Awaited<ReturnType<typeof open>>;
 		try {
 			handle = await open(
@@ -345,11 +69,7 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
 				constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
 			);
 		} catch {
-			return {
-				profiles: [],
-				active: null,
-				...(defaultCredential ? { defaultCredential } : {}),
-			};
+			return { profiles: [], active: null, ...quotaAuth };
 		}
 		try {
 			const stat = await handle.stat();
@@ -363,7 +83,7 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
 				return {
 					profiles: [],
 					active: null,
-					...(defaultCredential ? { defaultCredential } : {}),
+					...quotaAuth,
 				};
 			const parsed = JSON.parse(await handle.readFile("utf8"));
 			const entries = parsed?.providers?.openai?.accounts;
@@ -371,7 +91,7 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
 				return {
 					profiles: [],
 					active: null,
-					...(defaultCredential ? { defaultCredential } : {}),
+					...quotaAuth,
 				};
 			const active =
 				typeof parsed?.providers?.openai?.active === "string"
@@ -405,7 +125,7 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
 			return {
 				profiles,
 				active,
-				...(defaultCredential ? { defaultCredential } : {}),
+				...quotaAuth,
 			};
 		} finally {
 			await handle.close();
@@ -426,17 +146,29 @@ export class NativePiAccounts {
 	private async quotaFor(
 		id: string,
 		credential: PiQuotaCredential | undefined,
+		companion: PiQuotaCredential | undefined,
+		companionUsageEnabled: boolean,
 		refresh: boolean,
 	): Promise<QuotaResult> {
 		if (!credential) return { usage: null, plan: null };
-		const fingerprint =
-			credential.kind === "oauth"
-				? createHash("sha256")
-						.update(credential.access)
-						.update("\\0")
-						.update(credential.accountId ?? "")
-						.digest("hex")
-				: "api-key";
+		const fingerprint = createHash("sha256")
+			.update(
+				JSON.stringify([
+					credential.kind === "oauth"
+						? [
+								credential.access,
+								credential.accountId,
+								credential.clientId,
+								credential.scopes,
+							]
+						: credential.kind,
+					companion?.kind === "oauth"
+						? [companion.access, companion.accountId]
+						: companion?.kind,
+					companionUsageEnabled,
+				]),
+			)
+			.digest("hex");
 		const cached = this.quotaCache.get(id);
 		if (
 			!refresh &&
@@ -449,7 +181,11 @@ export class NativePiAccounts {
 					? { ...cached.result.usage, cached: true }
 					: null,
 			};
-		const result = await fetchPiQuota(credential);
+		const result = await fetchPiQuota(
+			credential,
+			companion,
+			companionUsageEnabled,
+		);
 		this.quotaCache.set(id, { fingerprint, at: Date.now(), result });
 		return result;
 	}
@@ -567,6 +303,8 @@ export class NativePiAccounts {
 						await this.quotaFor(
 							profile.id,
 							profile.quotaCredential,
+							stored.companionCredential,
+							stored.companionUsageEnabled === true,
 							refreshUsage,
 						),
 					);
@@ -576,6 +314,8 @@ export class NativePiAccounts {
 		const defaultQuota = await this.quotaFor(
 			"pi-native:default",
 			stored.defaultCredential,
+			stored.companionCredential,
+			stored.companionUsageEnabled === true,
 			refreshUsage,
 		);
 		const counts = new Map<string, number>();
