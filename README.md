@@ -6,7 +6,7 @@ Pi OpenAI profiles are managed in Pi's canonical `pi-accounts.json`; this plugin
 
 Sensitive operations use the current session/service epoch and workspace identity. Snapshots include names/status only; raw credential data stays in the private Pi store and never enters Paseo client state. Removing a profile refuses when a reachable live session currently uses it. Sessions without a bridge are surfaced in a warning; removal carries an explicit warning that an offline conversation may fail closed when it resumes.
 
-Claude Code, Codex, Copilot and other upstream adapters retain their own backends. Pi usage remains in Paseo's native context/usage display, not fabricated as account quota.
+Claude Code, Codex, Copilot and other upstream adapters retain their own backends. Pi OAuth profiles show their ChatGPT quota windows when OpenAI exposes them; API-key profiles report quota as unavailable. Access tokens stay server-side and are never included in account views.
 
 Use several Claude, ChatGPT (Codex), GitHub Copilot, Kimi Code, OpenCode Go, Pi and Oh My Pi subscriptions side by side in [Paseo](https://paseo.sh), without logging in and out of the CLI.
 

@@ -111,7 +111,7 @@ export default function contribute(server: PluginServerContext) {
 	server.handle(getState, async ({ refreshUsage }, context) => {
 		const view = await service.view(context.paseo, refreshUsage);
 		try {
-			return await nativePi.view(view, context);
+			return await nativePi.view(view, context, refreshUsage);
 		} catch {
 			return {
 				...view,
