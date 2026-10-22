@@ -15,6 +15,7 @@ import { fetchPiQuota, readQuotaAuthData } from "./pi-quota";
 import type { PiQuotaCredential, QuotaResult } from "./pi-quota";
 
 const PREFIX = "pi-native:";
+const QUOTA_CACHE_MS = 60_000;
 const accountId = (name: string | null) =>
 	name === null
 		? `${PREFIX}default`
