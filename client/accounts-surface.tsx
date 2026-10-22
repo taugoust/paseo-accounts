@@ -40,7 +40,10 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
   const multiHost = hosts.length > 1;
   const hostStatus = hosts.find((entry) => entry.serverId === host.id)?.status;
   const offline = hostStatus !== undefined && hostStatus !== "online";
-  // Keep usage moving while the screen is open.
+  // Refresh immediately after navigation; polling alone can leave a stale snapshot visible.
+  useEffect(() => {
+    void store.refresh({ fresh: true });
+  }, [host.id, store, tab]);
   useEffect(() => store.watch(VISIBLE_POLL_MS), [store]);
 
   const families = shownFamilies(state);
