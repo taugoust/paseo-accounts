@@ -121,7 +121,7 @@ export default function contribute(server: PluginServerContext) {
 				logins: view.logins.filter((l) => l.family !== "pi"),
 				warnings: [
 					...view.warnings,
-					"Pi account bridge unavailable; no account binding is inferred.",
+					"Pi account bridge unavailable.",
 				],
 			};
 		}

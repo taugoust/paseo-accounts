@@ -6,6 +6,7 @@ import { FAMILIES, type Family, type StateView } from "../shared/model";
 import { getState } from "../shared/rpc";
 
 const IDLE_POLL_MS = 20_000;
+const BRIDGE_RETRY_MS = 1_500;
 /** While the Accounts screen is open, so usage moves as agents use it. */
 export const VISIBLE_POLL_MS = 4_000;
 const ACTIVE_POLL_MS = 1_500;
@@ -62,7 +63,16 @@ export function createStore(client: PluginClientContext): AccountsStore {
     if (timer) clearTimeout(timer);
     const loginActive = snapshot.state?.logins.some((login) => isOpen(login.step)) ?? false;
     const delay = Math.min(IDLE_POLL_MS, loginActive ? ACTIVE_POLL_MS : IDLE_POLL_MS, ...watchers);
-    timer = setTimeout(() => void refresh(), delay);
+    // Bridge failures arrive as a successful state with a warning, so retry that state promptly.
+    const bridgeUnavailable = snapshot.state?.warnings.some(
+      (warning) =>
+        warning === "Pi account bridge unavailable." ||
+        warning.includes("Pi sessions are not connected to the live account switcher"),
+    );
+    timer = setTimeout(
+      () => void refresh(),
+      bridgeUnavailable && watchers.length > 0 ? Math.min(delay, BRIDGE_RETRY_MS) : delay,
+    );
   };
 
   const refresh = (options: { refreshUsage?: boolean; fresh?: boolean } = {}): Promise<void> => {
