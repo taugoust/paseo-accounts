@@ -51,6 +51,8 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
   }, [isFocused, store]);
 
   const families = shownFamilies(state);
+  // Keep the standalone Codex provider available elsewhere, but omit its separate row here.
+  const accountFamilies = families.filter((family) => family !== "codex");
   const openAgent = navigation ? (agentId: string) => navigation.openAgent({ agentId, serverId: host.id }) : undefined;
   const liveAgents = state?.agents.filter((agent) => agent.status !== "closed") ?? [];
   const folderCount = state?.accounts.reduce((sum, account) => sum + account.folders.length, 0) ?? 0;
@@ -122,7 +124,7 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
 
         {state ? (
           <>
-            <CapacityStrip theme={theme} state={state} families={families} compact={layout.compact} onSelect={select} />
+            <CapacityStrip theme={theme} state={state} families={accountFamilies} compact={layout.compact} onSelect={select} />
             <Tabs
               theme={theme}
               value={tab}
@@ -133,7 +135,7 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
                 {
                   id: "accounts",
                   label: "Accounts",
-                  count: layout.compact ? undefined : state.accounts.filter((account) => families.includes(account.family)).length,
+                  count: layout.compact ? undefined : state.accounts.filter((account) => accountFamilies.includes(account.family)).length,
                 },
                 { id: "agents", label: "Agents", count: layout.compact ? undefined : liveAgents.length },
                 { id: "projects", label: "Projects", count: layout.compact ? undefined : folderCount },
@@ -142,7 +144,7 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
               ]}
             />
             {tab === "accounts"
-              ? families.map((family) => (
+              ? accountFamilies.map((family) => (
                   <ProviderGroup
                     key={family}
                     theme={theme}
