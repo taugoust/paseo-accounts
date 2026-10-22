@@ -64,14 +64,15 @@ export function createStore(client: PluginClientContext): AccountsStore {
     const loginActive = snapshot.state?.logins.some((login) => isOpen(login.step)) ?? false;
     const delay = Math.min(IDLE_POLL_MS, loginActive ? ACTIVE_POLL_MS : IDLE_POLL_MS, ...watchers);
     // Bridge failures arrive as a successful state with a warning, so retry that state promptly.
-    const bridgeUnavailable = snapshot.state?.warnings.some(
+    const piStateNeedsRetry = snapshot.state?.warnings.some(
       (warning) =>
         warning === "Pi account bridge unavailable." ||
-        warning.includes("Pi sessions are not connected to the live account switcher"),
+        warning.includes("Pi sessions are not connected to the live account switcher") ||
+        warning.includes("Pi session discovery is temporarily unavailable"),
     );
     timer = setTimeout(
       () => void refresh(),
-      bridgeUnavailable && watchers.length > 0 ? Math.min(delay, BRIDGE_RETRY_MS) : delay,
+      piStateNeedsRetry && watchers.length > 0 ? Math.min(delay, BRIDGE_RETRY_MS) : delay,
     );
   };
 

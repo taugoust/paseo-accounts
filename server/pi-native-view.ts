@@ -215,30 +215,36 @@ export class NativePiAccounts {
 			status: string;
 		}> = [];
 		let cursor: string | undefined,
-			complete = false;
+			complete = false,
+			discoveryUnavailable = false;
 		for (let page = 0; page < 10; page++) {
-			const result = await context.paseo.agents.list({
-				page: { limit: 200, ...(cursor ? { cursor } : {}) },
-			});
-			for (const { agent } of result.entries)
-				if (
-					agent.provider === "pi" &&
-					!agent.archivedAt &&
-					agent.status !== "closed" &&
-					agent.workspaceId
-				)
-					targets.push({
-						id: agent.id,
-						workspaceId: agent.workspaceId,
-						title: agent.title ?? null,
-						cwd: agent.cwd,
-						status: agent.status,
-					});
-			if (!result.pageInfo.hasMore || !result.pageInfo.nextCursor) {
-				complete = true;
+			try {
+				const result = await context.paseo.agents.list({
+					page: { limit: 200, ...(cursor ? { cursor } : {}) },
+				});
+				for (const { agent } of result.entries)
+					if (
+						agent.provider === "pi" &&
+						!agent.archivedAt &&
+						agent.status !== "closed" &&
+						agent.workspaceId
+					)
+						targets.push({
+							id: agent.id,
+							workspaceId: agent.workspaceId,
+							title: agent.title ?? null,
+							cwd: agent.cwd,
+							status: agent.status,
+						});
+				if (!result.pageInfo.hasMore || !result.pageInfo.nextCursor) {
+					complete = true;
+					break;
+				}
+				cursor = result.pageInfo.nextCursor;
+			} catch {
+				discoveryUnavailable = true;
 				break;
 			}
-			cursor = result.pageInfo.nextCursor;
 		}
 		const routes: AgentRoute[] = [];
 		const piLogins: StateView["logins"] = [];
@@ -381,7 +387,11 @@ export class NativePiAccounts {
 			warnings.push(
 				`${unavailable} Pi sessions are not connected to the live account switcher; their current selection is left unknown.`,
 			);
-		if (!complete)
+		if (discoveryUnavailable)
+			warnings.push(
+				"Pi session discovery is temporarily unavailable. Stored account data is still shown.",
+			);
+		if (!complete && !discoveryUnavailable)
 			warnings.push(
 				"Pi session discovery reached its page limit; the conversation list may be incomplete.",
 			);
