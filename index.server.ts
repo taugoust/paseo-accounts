@@ -112,7 +112,18 @@ export default function contribute(server: PluginServerContext) {
 		const view = await service.view(context.paseo, refreshUsage);
 		try {
 			return await nativePi.view(view, context, refreshUsage);
-		} catch {
+		} catch (error) {
+			const diagnostic = describe(error)
+				.replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+				.replace(/\beyJ[\w-]*\.[\w-]*\.[\w-]*/g, "[JWT redacted]")
+				.replace(/\b(?:sk|rk)-[\w-]{8,}\b/gi, "[API key redacted]")
+				.replace(
+					/((?:access|refresh|api[_-]?key|capability)["']?\s*[:=]\s*["']?)[^,\s"'}]+/gi,
+					"$1[redacted]",
+				)
+				.replace(/[\r\n\t]+/g, " ")
+				.slice(0, 300);
+			console.error(`[paseo-accounts] Pi account view failed: ${diagnostic}`);
 			return {
 				...view,
 				accounts: view.accounts.filter((a) => a.family !== "pi"),

@@ -88,7 +88,10 @@ export function createStore(client: PluginClientContext): AccountsStore {
         // An older, slower answer must not overwrite a newer one.
         if (sequence >= published) {
           published = sequence;
-          publish({ state, error: null });
+          publish({
+            state: retainPiAccountsDuringBridgeFailure(state, snapshot.state),
+            error: null,
+          });
         }
       })
       .catch((error: unknown) => {
@@ -141,6 +144,29 @@ export function createStore(client: PluginClientContext): AccountsStore {
     watch,
     watchClosely: () => watch(ACTIVE_POLL_MS),
     refresh,
+  };
+}
+
+function retainPiAccountsDuringBridgeFailure(
+  next: StateView,
+  previous: StateView | null,
+): StateView {
+  if (!previous || !next.warnings.includes("Pi account bridge unavailable.")) return next;
+  const cachedPiAccounts = previous.accounts
+    .filter((account) => account.family === "pi")
+    .map((account) => ({
+      ...account,
+      agentCount: 0,
+      usage: account.usage ? { ...account.usage, cached: true } : null,
+    }));
+  if (cachedPiAccounts.length === 0) return next;
+  return {
+    ...next,
+    accounts: [
+      ...next.accounts.filter((account) => account.family !== "pi"),
+      ...cachedPiAccounts,
+    ],
+    installed: [...new Set([...next.installed, "pi"])],
   };
 }
 
