@@ -19,6 +19,8 @@ type Tab = "accounts" | "agents" | "projects" | "activity" | "settings";
 
 export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsStore }) {
   const { theme, layout, host, store, navigation } = props;
+  const isFocused =
+    (props as PluginSurfaceProps & { isFocused?: boolean }).isFocused ?? true;
   const { state, error } = useStore(store);
   const text = useText(theme);
   const colors = theme.colors;
@@ -40,11 +42,13 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
   const multiHost = hosts.length > 1;
   const hostStatus = hosts.find((entry) => entry.serverId === host.id)?.status;
   const offline = hostStatus !== undefined && hostStatus !== "online";
-  // Refresh immediately after navigation; polling alone can leave a stale snapshot visible.
+  // Native stack screens stay mounted while blurred, so refresh on focus, host, and tab changes.
   useEffect(() => {
-    void store.refresh({ fresh: true });
-  }, [host.id, store, tab]);
-  useEffect(() => store.watch(VISIBLE_POLL_MS), [store]);
+    if (isFocused) void store.refresh({ fresh: true });
+  }, [host.id, isFocused, store, tab]);
+  useEffect(() => {
+    if (isFocused) return store.watch(VISIBLE_POLL_MS);
+  }, [isFocused, store]);
 
   const families = shownFamilies(state);
   const openAgent = navigation ? (agentId: string) => navigation.openAgent({ agentId, serverId: host.id }) : undefined;
