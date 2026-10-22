@@ -65,8 +65,8 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
     <View style={{ flex: 1, backgroundColor: colors.surface0 }}>
       <ScrollView
         contentContainerStyle={{
-          padding: layout.compact ? 16 : 28,
-          gap: layout.compact ? 16 : 20,
+          padding: layout.compact ? 12 : 24,
+          gap: 16,
           maxWidth: 880,
           width: "100%",
           alignSelf: "center",
@@ -74,7 +74,7 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
       >
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <View style={{ flexShrink: 1, gap: 2 }}>
-            <Text style={[text.title, { fontSize: 20, letterSpacing: -0.3 }]} accessibilityRole="header">
+            <Text style={text.title} accessibilityRole="header">
               Accounts
             </Text>
             {multiHost ? (
@@ -244,7 +244,7 @@ function ProviderGroup({
       {accounts.length === 0 ? (
         <Text style={text.muted}>No accounts yet.</Text>
       ) : (
-        <View style={{ borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 }}>
+        <View style={{ borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1, overflow: "hidden" }}>
           {accounts.map((account, index) => (
             <AccountRow
               key={account.id}
@@ -298,9 +298,9 @@ function ProviderPicker({
                   flexDirection: "row",
                   alignItems: "center",
                   gap: 12,
-                  paddingHorizontal: 14,
+                  paddingHorizontal: 12,
                   minHeight: 48,
-                  borderRadius: 10,
+                  borderRadius: 8,
                   borderWidth: 1,
                   borderColor: colors.border,
                   backgroundColor: colors.surface2,
@@ -328,9 +328,9 @@ function HostScope({ theme, label }: { theme: Theme; label: string }) {
       style={{
         flexDirection: "row",
         alignItems: "flex-start",
-        gap: 10,
+        gap: 8,
         padding: 12,
-        borderRadius: 10,
+        borderRadius: 8,
         borderWidth: 1,
         borderColor: theme.colors.border,
         backgroundColor: theme.colors.surface1,

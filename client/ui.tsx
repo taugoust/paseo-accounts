@@ -108,6 +108,7 @@ export function Button({
   tooltipPlacement?: "top" | "bottom";
 }) {
   const small = size === "small";
+  const [hovered, setHovered] = useState(false);
   const tip = useTooltip(tooltip);
   const colors = theme.colors;
   const palette = {
@@ -127,18 +128,20 @@ export function Button({
         disabled={inactive}
         onPress={onPress}
         {...tip.handlers}
+        onHoverIn={() => { setHovered(true); tip.handlers.onHoverIn?.(); }}
+        onHoverOut={() => { setHovered(false); tip.handlers.onHoverOut?.(); }}
         style={({ pressed }) => ({
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "center",
-          gap: small ? 5 : 6,
-          paddingHorizontal: small ? 10 : 12,
-          paddingVertical: small ? 5 : 8,
-          borderRadius: small ? 7 : 8,
+          gap: 6,
+          paddingHorizontal: small ? 8 : 12,
+          paddingVertical: small ? 4 : 8,
+          borderRadius: 8,
           borderWidth: 1,
           borderColor: palette.border,
-          backgroundColor: palette.background,
-          opacity: inactive ? 0.55 : pressed ? 0.8 : 1,
+          backgroundColor: !inactive && hovered && tone !== "primary" ? colors.surface2 : palette.background,
+          opacity: inactive ? 0.5 : pressed ? 0.85 : 1,
         })}
       >
         {busy ? (
@@ -146,7 +149,7 @@ export function Button({
         ) : icon ? (
           <Icon name={icon} size={small ? 13 : 15} color={palette.foreground} />
         ) : null}
-        <Text style={{ color: palette.foreground, fontSize: small ? 12 : 13, fontWeight: "600" }}>{label}</Text>
+        <Text style={{ color: palette.foreground, fontSize: small ? 12 : 14, lineHeight: small ? 18 : 20, fontWeight: "500" }}>{label}</Text>
       </Pressable>
       {tip.visible && tooltip ? <TooltipBubble theme={theme} text={tooltip} placement={tooltipPlacement} align={tooltipAlign} /> : null}
     </View>
@@ -251,7 +254,7 @@ export function Badge({
         borderColor: tone === "muted" ? colors.border : color,
       }}
     >
-      <Text style={{ color, fontSize: 11, fontWeight: "600" }}>{label}</Text>
+      <Text style={{ color, fontSize: 11, lineHeight: 16, fontWeight: "500" }}>{label}</Text>
     </View>
   );
 }
@@ -291,7 +294,7 @@ export function Card({
         ...(fill ? { flex: 1, minWidth: 0 } : null),
         padding: 16,
         gap: 12,
-        borderRadius: 10,
+        borderRadius: 8,
         borderWidth: 1,
         borderColor: theme.colors.border,
         backgroundColor: theme.colors.surface1,
@@ -305,14 +308,14 @@ export function Card({
 export function useText(theme: Theme) {
   return useMemo(
     () => ({
-      title: { color: theme.colors.foreground, fontSize: 20, fontWeight: "700" as const, letterSpacing: -0.35 },
-      heading: { color: theme.colors.foreground, fontSize: 14, fontWeight: "600" as const, letterSpacing: -0.1 },
-      body: { color: theme.colors.foreground, fontSize: 14 },
-      strong: { color: theme.colors.foreground, fontSize: 14, fontWeight: "600" as const },
-      muted: { color: theme.colors.foregroundMuted, fontSize: 13, lineHeight: 19 },
-      small: { color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 },
-      danger: { color: theme.colors.statusDanger, fontSize: 13 },
-      warning: { color: theme.colors.statusWarning, fontSize: 13 },
+      title: { color: theme.colors.foreground, fontSize: 18, lineHeight: 24, fontWeight: "600" as const },
+      heading: { color: theme.colors.foreground, fontSize: 14, lineHeight: 20, fontWeight: "500" as const },
+      body: { color: theme.colors.foreground, fontSize: 14, lineHeight: 20 },
+      strong: { color: theme.colors.foreground, fontSize: 14, lineHeight: 20, fontWeight: "500" as const },
+      muted: { color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 18 },
+      small: { color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 18 },
+      danger: { color: theme.colors.statusDanger, fontSize: 12, lineHeight: 18 },
+      warning: { color: theme.colors.statusWarning, fontSize: 12, lineHeight: 18 },
       mono: { color: theme.colors.foreground, fontSize: 20, fontWeight: "700" as const, letterSpacing: 2 },
     }),
     [theme],
@@ -362,7 +365,7 @@ export function Tabs<Id extends string>({
   return (
     <View
       accessibilityRole="tablist"
-      style={{ flexDirection: "row", gap: 2, padding: 3, borderRadius: 10, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignSelf: fill ? "stretch" : "flex-start" }}
+      style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, borderBottomWidth: 1, borderBottomColor: colors.border, alignSelf: fill ? "stretch" : "flex-start" }}
     >
       {tabs.map((tab) => {
         const selected = tab.id === value;
@@ -379,12 +382,13 @@ export function Tabs<Id extends string>({
               gap: 6,
               paddingHorizontal: fill ? 6 : 12,
               minHeight: 34,
-              borderRadius: 7,
-              backgroundColor: selected ? colors.surface2 : "transparent",
-              opacity: pressed ? 0.7 : 1,
+              borderBottomWidth: 2,
+              borderBottomColor: selected ? colors.accent : "transparent",
+              backgroundColor: pressed ? colors.surface2 : "transparent",
+              opacity: pressed ? 0.85 : 1,
             })}
           >
-            <Text style={{ color: selected ? colors.foreground : colors.foregroundMuted, fontSize: 13, fontWeight: selected ? "600" : "500" }}>{tab.label}</Text>
+            <Text style={{ color: selected ? colors.foreground : colors.foregroundMuted, fontSize: 13, lineHeight: 18, fontWeight: "500" }}>{tab.label}</Text>
             {tab.count ? (
               <Text style={{ color: colors.foregroundMuted, fontSize: 11, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{tab.count}</Text>
             ) : null}

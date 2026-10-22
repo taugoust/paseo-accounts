@@ -56,7 +56,8 @@ export function AgentsTab({
 						/>
 						<View
 							style={{
-								borderRadius: 12,
+								borderRadius: 8,
+                overflow: "hidden",
 								borderWidth: 1,
 								borderColor: colors.border,
 								backgroundColor: colors.surface1,
@@ -123,7 +124,7 @@ function AgentRow({
 				flexDirection: "row",
 				alignItems: "center",
 				gap: 10,
-				paddingHorizontal: 14,
+				paddingHorizontal: 12,
 				paddingVertical: 10,
 				borderTopWidth: divided ? 1 : 0,
 				borderTopColor: colors.border,
@@ -154,7 +155,7 @@ function AgentRow({
 				/>
 				<View style={{ flex: 1, minWidth: 0, gap: 1 }}>
 					<Text
-						style={[text.body, { fontSize: 13, fontWeight: "500" }]}
+						style={text.strong}
 						numberOfLines={1}
 					>
 						{agent.title ?? "Untitled agent"}
@@ -278,7 +279,7 @@ function MoveModal({
 				gap: 10,
 				paddingHorizontal: 12,
 				minHeight: 44,
-				borderRadius: 9,
+				borderRadius: 8,
 				borderWidth: 1,
 				borderColor: selected ? colors.accent : colors.border,
 				backgroundColor: colors.surface2,

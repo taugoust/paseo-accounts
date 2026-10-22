@@ -27,27 +27,27 @@ export function ActivityTab({ theme, state, onOpenAgent }: { theme: Theme; state
     .map((entry) => ({ agentId: entry.agentId, agentTitle: entry.agentTitle, row: entry.parsed.data as SwitchRow }));
   if (entries.length === 0) {
     return (
-      <View style={{ borderRadius: 12, borderWidth: 1, borderStyle: "dashed", borderColor: colors.border, padding: 20, alignItems: "center", gap: 4 }}>
+      <View style={{ borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1, padding: 16, alignItems: "center", gap: 4 }}>
         <Text style={text.strong}>No switches yet</Text>
         <Text style={[text.small, { textAlign: "center" }]}>Every time an agent changes accounts, or stays put because nothing has room, it shows up here.</Text>
       </View>
     );
   }
   return (
-    <View style={{ borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 }}>
+    <View style={{ borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1, overflow: "hidden" }}>
       {entries.map(({ agentId, agentTitle, row }, index) => {
         const trouble = row.outcome === "stayed" || row.reason === "exhausted";
         return (
           <View
             key={`${agentId}:${row.at}:${index}`}
-            style={{ flexDirection: "row", gap: 12, paddingHorizontal: 14, paddingVertical: 12, borderTopWidth: index > 0 ? 1 : 0, borderTopColor: colors.border }}
+            style={{ flexDirection: "row", gap: 12, paddingHorizontal: 12, paddingVertical: 12, borderTopWidth: index > 0 ? 1 : 0, borderTopColor: colors.border }}
           >
             <View style={{ paddingTop: 2 }}>
               <Icon name={OUTCOME_ICON[row.outcome]} size={15} color={trouble ? colors.statusWarning : colors.foregroundMuted} />
             </View>
             <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
               <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-                <Pressable accessibilityRole="button" disabled={!onOpenAgent} onPress={() => onOpenAgent?.(agentId)} style={{ flexShrink: 1 }}>
+                <Pressable accessibilityRole="button" disabled={!onOpenAgent} onPress={() => onOpenAgent?.(agentId)} style={({ pressed }) => ({ flexShrink: 1, opacity: pressed ? 0.85 : 1 })}>
                   <Text style={[text.strong, { fontSize: 13 }]} numberOfLines={1}>
                     {agentTitle ?? "Untitled agent"}
                   </Text>

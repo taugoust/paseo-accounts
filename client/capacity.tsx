@@ -27,7 +27,8 @@ export function CapacityStrip({
   return (
     <View
       style={{
-        borderRadius: 12,
+        borderRadius: 8,
+        overflow: "hidden",
         borderWidth: 1,
         borderColor: colors.border,
         backgroundColor: colors.surface1,
@@ -98,8 +99,8 @@ function Lane({
         flexDirection: stacked ? "column" : "row",
         alignItems: stacked ? "stretch" : "center",
         gap: stacked ? 8 : compact ? 12 : 16,
-        paddingHorizontal: 14,
-        paddingVertical: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 12,
         borderTopWidth: divided ? 1 : 0,
         borderTopColor: colors.border,
       }}
@@ -112,7 +113,7 @@ function Lane({
           gap: 2,
         }}
       >
-        <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: "600" }} numberOfLines={1}>
+        <Text style={{ color: colors.foreground, fontSize: 14, lineHeight: 20, fontWeight: "500" }} numberOfLines={1}>
           {FAMILY_HEADING[family]}
         </Text>
         <Text

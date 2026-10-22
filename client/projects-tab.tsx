@@ -78,11 +78,11 @@ export function ProjectsTab({
 			{rules.length === 0 ? (
 				<View
 					style={{
-						borderRadius: 12,
+						borderRadius: 8,
 						borderWidth: 1,
-						borderStyle: "dashed",
+						backgroundColor: colors.surface1,
 						borderColor: colors.border,
-						padding: 20,
+						padding: 16,
 						alignItems: "center",
 						gap: 4,
 					}}
@@ -96,7 +96,8 @@ export function ProjectsTab({
 			) : (
 				<View
 					style={{
-						borderRadius: 12,
+						borderRadius: 8,
+						overflow: "hidden",
 						borderWidth: 1,
 						borderColor: colors.border,
 						backgroundColor: colors.surface1,
@@ -109,8 +110,8 @@ export function ProjectsTab({
 								flexDirection: "row",
 								alignItems: "center",
 								gap: 12,
-								paddingHorizontal: 14,
-								paddingVertical: 10,
+								paddingHorizontal: 12,
+								paddingVertical: 12,
 								borderTopWidth: index > 0 ? 1 : 0,
 								borderTopColor: colors.border,
 							}}

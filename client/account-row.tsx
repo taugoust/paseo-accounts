@@ -158,10 +158,11 @@ export function AccountRow({
 				accessibilityLabel={`${account.label}, ${status}`}
 				onPress={onToggle}
 				style={({ pressed }) => ({
-					paddingHorizontal: 14,
+					paddingHorizontal: 12,
 					paddingVertical: 12,
-					gap: 10,
-					opacity: pressed ? 0.75 : 1,
+					gap: 8,
+					backgroundColor: pressed ? colors.surface2 : "transparent",
+					opacity: pressed ? 0.85 : 1,
 				})}
 			>
 				<View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
@@ -732,10 +733,9 @@ export function SectionLabel({
 		<Text
 			style={{
 				color: theme.colors.foregroundMuted,
-				fontSize: 11,
-				fontWeight: "600",
-				letterSpacing: 0.6,
-				textTransform: "uppercase",
+				fontSize: 12,
+				lineHeight: 18,
+				fontWeight: "normal",
 			}}
 		>
 			{label}
