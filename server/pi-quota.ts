@@ -18,6 +18,7 @@ export type PiQuotaCredential =
 
 export type QuotaAuthData = {
 	defaultCredential?: PiQuotaCredential;
+	codexDefaultCredential?: PiQuotaCredential;
 	companionCredential?: PiQuotaCredential;
 	companionUsageEnabled: boolean;
 };
@@ -142,6 +143,7 @@ export async function readQuotaAuthData(
 	]);
 	return {
 		defaultCredential: quotaCredential(auth?.openai, true),
+		codexDefaultCredential: quotaCredential(auth?.["openai-codex"], true),
 		companionCredential: quotaCredential(auth?.["openai-codex"], true),
 		companionUsageEnabled: settings?.openaiUseCodexUsage === true,
 	};
@@ -412,6 +414,7 @@ export async function fetchPiQuota(
 	companionCredential?: PiQuotaCredential,
 	companionUsageEnabled = false,
 	allowUnverifiedCompanionIdentity = false,
+	provider: "openai" | "openai-codex" = "openai",
 ): Promise<QuotaResult> {
 	if (!credential) return { usage: null, plan: null };
 	if (credential.kind === "api-key")
@@ -431,6 +434,11 @@ export async function fetchPiQuota(
 	const accountId =
 		credential.accountId ?? accountIdFromAccess(credential.access);
 	try {
+		if (provider === "openai-codex") {
+			if (!accountId)
+				return { usage: usageError("ChatGPT account identity is unavailable for this profile."), plan: null };
+			return mapQuota(await chatgptJson(credential.access, accountId));
+		}
 		if (
 			credential.clientId &&
 			credential.scopes?.includes("chatgpt.tokens.use.direct")
