@@ -609,8 +609,24 @@ export class NativePiAccounts {
       current.archivedAt
     )
       throw new Error("The selected Pi conversation is no longer available.");
+    const modelProvider =
+      typeof current.model === "string" &&
+      current.model.startsWith("openai-codex/")
+        ? "openai-codex"
+        : typeof current.model === "string" &&
+            current.model.startsWith("openai/")
+          ? "openai"
+          : null;
+    if (!modelProvider || modelProvider !== provider)
+      throw new Error(
+        `Choose a matching ${provider === "openai-codex" ? "Codex" : "OpenAI"} model first; account selection does not change the model provider.`,
+      );
     const status = await this.controls.status(
-      { agentId, workspaceId: current.workspaceId, providerId: provider },
+      {
+        agentId,
+        workspaceId: current.workspaceId,
+        ...(provider === "openai-codex" ? { providerId: provider } : {}),
+      },
       context,
     );
     if (!status.available || !status.snapshot)

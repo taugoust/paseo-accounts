@@ -197,6 +197,40 @@ describe("provider-aware native Pi accounts", () => {
       out.agents.find((a) => a.agentId === "personal-agent")?.accountId,
     ).toBe("pi-native:profile:work");
   });
+  it("rejects switching a Codex profile while the agent model is OpenAI", async () => {
+    let statusCalls = 0;
+    const controls = {
+      status: async () => {
+        statusCalls++;
+        return {} as never;
+      },
+    } as never;
+    const ctx = {
+      paseo: {
+        agents: {
+          ref: () => ({
+            refresh: async () => ({
+              agent: {
+                id: "a",
+                provider: "pi",
+                workspaceId: "w",
+                model: "openai/gpt-5",
+                archivedAt: null,
+              },
+            }),
+          }),
+        },
+      },
+    } as never;
+    await expect(
+      new NativePiAccounts(controls).switch(
+        "a",
+        "pi-native:codex:profile:work",
+        ctx,
+      ),
+    ).rejects.toThrow(/matching Codex model first/);
+    expect(statusCalls).toBe(0);
+  });
   it("uses root Codex auth for OpenAI companion independently from named Work Codex quota", async () => {
     const pi = await fixture();
     await credentials(pi, {

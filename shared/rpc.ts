@@ -1,6 +1,11 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
-import { FamilySchema, LoginMethodSchema, LoginViewSchema, StateViewSchema } from "./model";
+import {
+  FamilySchema,
+  LoginMethodSchema,
+  LoginViewSchema,
+  StateViewSchema,
+} from "./model";
 
 export const getState = defineRpc({
   name: "paseo-accounts.state",
@@ -12,6 +17,8 @@ export const startLogin = defineRpc({
   name: "paseo-accounts.login.start",
   input: z.object({
     family: FamilySchema,
+    /** Native Pi provider selection; omitted remains legacy OpenAI. */
+    providerId: z.enum(["openai", "openai-codex"]).optional(),
     /** Sign an existing account back in instead of adding a new one. */
     accountId: z.string().optional(),
     method: LoginMethodSchema.default("browser"),
@@ -33,7 +40,10 @@ export const cancelLogin = defineRpc({
 
 export const renameAccount = defineRpc({
   name: "paseo-accounts.accounts.rename",
-  input: z.object({ accountId: z.string(), label: z.string().trim().min(1).max(40) }),
+  input: z.object({
+    accountId: z.string(),
+    label: z.string().trim().min(1).max(40),
+  }),
   output: z.object({ ok: z.literal(true) }),
 });
 
@@ -56,7 +66,10 @@ export const ReopenSummarySchema = z.object({
   deferred: z.array(z.string()),
   failed: z.array(z.object({ agentId: z.string(), error: z.string() })),
   /** A conversation that could not move in place and continues in this new agent instead. */
-  continuedIn: z.object({ agentId: z.string(), title: z.string() }).nullable().default(null),
+  continuedIn: z
+    .object({ agentId: z.string(), title: z.string() })
+    .nullable()
+    .default(null),
 });
 export type ReopenSummary = z.infer<typeof ReopenSummarySchema>;
 
@@ -112,7 +125,10 @@ export const setDefaultAccount = defineRpc({
 /** The folders whose agents use this account (and that other agents leave it to). Paths may start with `~`. */
 export const setAccountPriority = defineRpc({
   name: "paseo-accounts.accounts.priority",
-  input: z.object({ accountId: z.string(), priority: z.enum(["first", "normal", "last"]) }),
+  input: z.object({
+    accountId: z.string(),
+    priority: z.enum(["first", "normal", "last"]),
+  }),
   output: z.object({ ok: z.literal(true) }),
 });
 
@@ -125,7 +141,10 @@ export const testAlert = defineRpc({
 
 export const setAccountFolders = defineRpc({
   name: "paseo-accounts.accounts.folders",
-  input: z.object({ accountId: z.string(), paths: z.array(z.string().trim().min(1)).max(50) }),
+  input: z.object({
+    accountId: z.string(),
+    paths: z.array(z.string().trim().min(1)).max(50),
+  }),
   output: ReopenSummarySchema,
 });
 
