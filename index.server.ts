@@ -159,6 +159,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(
     startLogin,
     async ({ family, method, accountId, providerId }, context) => {
+      if (providerId && family !== "pi") throw new Error("providerId is only valid for native Pi account setup.");
       if (family === "pi") {
         const codex =
           accountId?.startsWith("pi-native:codex:") ||
