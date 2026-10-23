@@ -3,9 +3,10 @@ import { mkdtemp, mkdir, chmod, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { NativePiAccounts } from "./pi-native-view";
-function token(accountId: string) {
+function token(accountId: string, email?: string) {
   const payload = Buffer.from(
     JSON.stringify({
+      ...(email ? { email } : {}),
       "https://api.openai.com/auth": { chatgpt_account_id: accountId },
     }),
   ).toString("base64url");
@@ -107,6 +108,27 @@ describe("provider-aware native Pi accounts", () => {
     expect(
       rows.find((a) => a.id === "pi-native:codex:profile:work")?.label,
     ).toBe("Work (Codex)");
+  });
+  it("labels the Codex default and derives its email safely without changing OpenAI identity", async () => {
+    const pi = await fixture();
+    await credentials(pi, {
+      openai: { type: "oauth", access: token("personal", "openai@example.test"), expires: Date.now() + 600000 },
+      "openai-codex": { type: "oauth", access: token("work", "codex@example.test"), expires: Date.now() + 600000 },
+    });
+    const out = await new NativePiAccounts().view(state(), context(), true);
+    const codex = out.accounts.find((a) => a.id === "pi-native:codex:default");
+    const openai = out.accounts.find((a) => a.id === "pi-native:default");
+    expect(out.warnings.some((warning) => warning.includes("Automatic Pi failover is intentionally disabled"))).toBe(false);
+    expect(codex).toMatchObject({ label: "Codex", email: "codex@example.test" });
+    expect(openai).toMatchObject({ label: "Default Pi login", email: null });
+
+    await credentials(pi, {
+      openai: { type: "oauth", access: token("personal"), expires: Date.now() + 600000 },
+      "openai-codex": { type: "oauth", access: "malformed", expires: Date.now() + 600000 },
+    });
+    const withoutEmail = await new NativePiAccounts().view(state(), context(), true);
+    expect(withoutEmail.accounts.find((a) => a.id === "pi-native:codex:default"))
+      .toMatchObject({ label: "Codex", email: null });
   });
   it("fails closed on Codex management when no provider-aware service exists", async () => {
     const calls: string[] = [];

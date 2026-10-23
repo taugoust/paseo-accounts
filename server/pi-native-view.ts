@@ -41,6 +41,7 @@ type StoredProfiles = {
   codexActive: string | null;
   defaultCredential?: PiQuotaCredential;
   codexDefaultCredential?: PiQuotaCredential;
+  codexDefaultEmail?: string | null;
   companionCredential?: PiQuotaCredential;
   companionUsageEnabled?: boolean;
 };
@@ -51,6 +52,25 @@ function quotaPlanLabel(result: QuotaResult): string | null {
   return result.identityVerified === false
     ? `Codex companion (identity unverified) · ${result.plan}`
     : `Codex companion · ${result.plan}`;
+}
+function oauthEmail(value: unknown): string | null {
+  const credential = record(value);
+  if (credential?.type !== "oauth" && credential?.kind !== "oauth") return null;
+  const identity = record(credential.account);
+  const direct = identity?.email;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const access = credential.access;
+  if (typeof access !== "string") return null;
+  try {
+    const parts = access.split(".");
+    if (parts.length !== 3 || !parts[1]) return null;
+    const claims = record(JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")));
+    const auth = record(claims?.["https://api.openai.com/auth"]);
+    const email = claims?.email ?? auth?.email;
+    return typeof email === "string" && email.trim() ? email.trim() : null;
+  } catch {
+    return null;
+  }
 }
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -82,7 +102,11 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
         constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
       );
     } catch {
-      return { ...empty(), ...quotaAuth };
+      return {
+        ...empty(),
+        ...quotaAuth,
+        codexDefaultEmail: oauthEmail(quotaAuth.codexDefaultCredential),
+      };
     }
     try {
       const stat = await handle.stat();
@@ -93,7 +117,11 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
         (stat.mode & 0o777) !== 0o600 ||
         stat.size > 2 * 1024 * 1024
       )
-        return { ...empty(), ...quotaAuth };
+        return {
+          ...empty(),
+          ...quotaAuth,
+          codexDefaultEmail: oauthEmail(quotaAuth.codexDefaultCredential),
+        };
       const parsed = JSON.parse(await handle.readFile("utf8"));
       const entries = parsed?.providers?.openai?.accounts;
       const codexEntries = parsed?.providers?.["openai-codex"]?.accounts;
@@ -144,6 +172,7 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
         active,
         codexActive,
         ...quotaAuth,
+        codexDefaultEmail: oauthEmail(quotaAuth.codexDefaultCredential),
       };
     } finally {
       await handle.close();
@@ -427,13 +456,16 @@ export class NativePiAccounts {
         stored.active === null,
         "main",
       ),
-      makeAccount(
-        accountId(null, "openai-codex"),
-        "Default Pi Codex login",
-        codexDefault,
-        stored.codexActive === null,
-        "main",
-      ),
+      {
+        ...makeAccount(
+          accountId(null, "openai-codex"),
+          "Codex",
+          codexDefault,
+          stored.codexActive === null,
+          "main",
+        ),
+        email: stored.codexDefaultEmail ?? null,
+      },
       ...canonical.map((p) =>
         makeAccount(
           accountId(p.id, p.provider),
@@ -447,10 +479,7 @@ export class NativePiAccounts {
         ),
       ),
     ];
-    const warnings = [
-      ...base.warnings,
-      "Pi account list, sign-in, rename, removal, defaults and idle-session switching use pi-accounts. Automatic Pi failover is intentionally disabled.",
-    ];
+    const warnings = [...base.warnings];
     if (unavailable)
       warnings.push(
         `${unavailable} Pi sessions are not connected to the live account switcher; their current selection is left unknown.`,
