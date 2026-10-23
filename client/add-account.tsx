@@ -275,12 +275,12 @@ export function AddAccountModal({
                 tone="primary"
                 icon="KeyRound"
                 label="ChatGPT sign-in"
-                tooltip="Sign in through Pi’s native OpenAI OAuth"
+                tooltip={piProvider === "openai-codex" ? "Sign in through Pi’s native Codex OAuth" : "Sign in through Pi’s native OpenAI OAuth"}
                 tooltipAlign="end"
                 disabled={!piName.trim()}
                 onPress={() => void addPiAccount("oauth")}
               />
-              <Button
+              {piProvider === "openai" ? <Button
                 theme={theme}
                 icon="Key"
                 label="API key"
@@ -288,7 +288,7 @@ export function AddAccountModal({
                 tooltipAlign="end"
                 disabled={!piName.trim()}
                 onPress={() => void addPiAccount("api_key")}
-              />
+              /> : null}
             </Row>
           )}
         </Modal.Content>

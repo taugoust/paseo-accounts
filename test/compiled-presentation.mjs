@@ -45,6 +45,7 @@ const surface = await compile('../client/accounts-surface.tsx');
 const activity = await compile('../client/activity-tab.tsx');
 const agents = await compile('../client/agents-tab.tsx');
 const projects = await compile('../client/projects-tab.tsx');
+const addAccount = await compile('../client/add-account.tsx');
 const sampleSource = stripTypeScriptTypes(await readFile(new URL('../preview/sample.ts', import.meta.url), 'utf8'), { mode:'transform' });
 const { sample } = await import(`data:text/javascript;base64,${Buffer.from(sampleSource).toString('base64')}`);
 const nodes = value => Array.isArray(value) ? value.flatMap(nodes) : !value || typeof value !== 'object' ? [] : typeof value.type === 'function' ? nodes(value.type(value.props)) : [value, ...nodes(value.props.children)];
@@ -100,6 +101,30 @@ for (const colors of palettes) {
     second.props.onPress(); assert.equal(chosen,'b');
   });
 }
+
+test('compiled Pi account setup selects the native provider and never offers Codex API-key login', async () => {
+  const calls = [];
+  const props = { theme:{colors:palettes[0]}, layout:{compact:true,platform:'ios'}, host:{id:'fixture',label:'Local host'}, multiHost:false, family:'pi', onClose() {}, store:{...store,rpc:async (rpc,input)=>{calls.push({rpc,input});return {accountId:'same-name'};}} };
+  let tree = render(addAccount.AddAccountModal, props);
+  let all = nodes(tree);
+  const selector = all.find(n=>n.type==='SettingsSelect');
+  assert.equal(selector.props.value,'openai');
+  assert.deepEqual(selector.props.options.map(option=>option.value),['openai','openai-codex']);
+  assert.match(text(tree),/API key/);
+  selector.props.onValueChange('openai-codex');
+  tree = render(addAccount.AddAccountModal, props, false);
+  all = nodes(tree);
+  assert.equal(all.find(n=>n.type==='SettingsSelect').props.value,'openai-codex');
+  assert.doesNotMatch(text(tree),/API key/);
+  all.find(n=>n.type==='TextInput').props.onChangeText('same-name');
+  tree = render(addAccount.AddAccountModal, props, false);
+  const signIn = nodes(tree).find(n=>n.type==='Pressable'&&n.props.accessibilityLabel==='ChatGPT sign-in');
+  assert.equal(Boolean(signIn.props.disabled),false);
+  signIn.props.onPress();
+  await Promise.resolve();
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0].input,{operation:'add',accountName:'same-name',method:'oauth',providerId:'openai-codex'});
+});
 
 test('compiled activity, agent and project views retain content and callbacks with native surfaces', () => {
   const theme = {colors:palettes[0]};
