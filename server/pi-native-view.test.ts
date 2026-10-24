@@ -187,20 +187,22 @@ describe("provider-aware native Pi accounts", () => {
     } as never;
     const controls = {
       status: async (input: { agentId: string; providerId?: string }) => {
+        const codex = (input.providerId ?? "openai") === "openai-codex";
         calls.push(`${input.agentId}:${input.providerId ?? "openai"}`);
-        const codex = input.providerId === "openai-codex";
         return {
           available: true,
+          sessionId: "s",
+          runtimeEpoch: "e",
           snapshot: {
+            sessionId: "s",
             providerId: codex ? "openai-codex" : "openai",
+            sessionRouting: { version: 1, providerId: codex ? "openai-codex" : "openai", revision: 1 },
             supportedProviders: ["openai", "openai-codex"],
             accounts: [{ id: "work", label: "Work", authKind: "oauth" }],
             currentAccountId: "work",
             canSwitch: true,
             pendingAccountNames: [],
           },
-          sessionId: "s",
-          runtimeEpoch: "e",
           reason: null,
         };
       },
@@ -219,39 +221,32 @@ describe("provider-aware native Pi accounts", () => {
       out.agents.find((a) => a.agentId === "personal-agent")?.accountId,
     ).toBe("pi-native:profile:work");
   });
-  it("rejects switching a Codex profile while the agent model is OpenAI", async () => {
-    let statusCalls = 0;
+  it("switches providers with committed routing capability, regardless of model alias", async () => {
+    const calls: any[] = [];
+    let routing: any = { version: 1, providerId: "openai", revision: 4 };
     const controls = {
-      status: async () => {
-        statusCalls++;
-        return {} as never;
-      },
+      status: async (input: any) => ({ available: true, sessionId: "s", runtimeEpoch: "e", reason: null, snapshot: {
+        protocol: 1, sessionId: "s", serviceEpoch: "svc", selectionRevision: 2,
+        providerId: input.providerId ?? "openai", sessionRouting: routing,
+        supportedProviders: ["openai", "openai-codex"], accounts: input.providerId === "openai-codex" ? [{ id: "work", label: "Work", authKind: "oauth" }] : [{ id: "alpha", label: "Alpha", authKind: "oauth" }],
+        currentAccountId: null, defaultSelected: true, activationStatus: "active", busy: false, canSwitch: true,
+        usage: { effectiveCredential: "unknown", status: "unknown", remoteEntitlement: "not-queried", settingsUrl: null }, pendingAccountNames: [],
+      }}),
+      switch: async (input: any) => { calls.push(input.request); routing = { ...routing, providerId: input.request.providerId, revision: routing.revision + 1 }; return { ok: true, snapshot: { providerId: routing.providerId, supportedProviders: ["openai", "openai-codex"] } }; },
     } as never;
-    const ctx = {
-      paseo: {
-        agents: {
-          ref: () => ({
-            refresh: async () => ({
-              agent: {
-                id: "a",
-                provider: "pi",
-                workspaceId: "w",
-                model: "openai/gpt-5",
-                archivedAt: null,
-              },
-            }),
-          }),
-        },
-      },
-    } as never;
-    await expect(
-      new NativePiAccounts(controls).switch(
-        "a",
-        "pi-native:codex:profile:work",
-        ctx,
-      ),
-    ).rejects.toThrow(/matching Codex model first/);
-    expect(statusCalls).toBe(0);
+    const ctx = { paseo: { agents: { ref: () => ({ refresh: async () => ({ agent: { id: "a", provider: "pi", workspaceId: "w", model: "openai/guard-alias", archivedAt: null } }) }), list: async () => ({ entries: [{ agent: { id: "a", provider: "pi", workspaceId: "w", status: "idle", archivedAt: null } }], pageInfo: { hasMore: false } }) } } } as never;
+    const service = new NativePiAccounts(controls);
+    await service.switch("a", "pi-native:codex:profile:work", ctx);
+    expect(calls[0]).toMatchObject({ providerId: "openai-codex", expectedRoutingRevision: 4 });
+    await service.switch("a", "pi-native:profile:alpha", ctx);
+    expect(calls[1]).toMatchObject({ providerId: "openai", expectedRoutingRevision: 5 });
+  });
+  it("refuses cross-provider changes on legacy runtimes and stale/missing identities", async () => {
+    const ctx = { paseo: { agents: { ref: () => ({ refresh: async () => ({ agent: { id: "a", provider: "pi", workspaceId: "w", model: "openai/guard", archivedAt: null } }) }) } } } as never;
+    const legacy = { status: async () => ({ available: true, sessionId: "s", runtimeEpoch: "e", snapshot: { sessionId: "s", providerId: "openai", accounts: [], canSwitch: true } }), switch: vi.fn() } as never;
+    await expect(new NativePiAccounts(legacy).switch("a", "pi-native:codex:default", ctx)).rejects.toThrow(/older Pi account service/);
+    const stale = { status: async () => ({ available: true, sessionId: "other", runtimeEpoch: "e", snapshot: { sessionId: "s", providerId: "openai", sessionRouting: { version: 1, providerId: "openai", revision: 1 }, accounts: [], canSwitch: true } }) } as never;
+    await expect(new NativePiAccounts(stale).switch("a", "pi-native:default", ctx)).rejects.toThrow(/stale or missing session metadata/);
   });
   it("uses root Codex auth for OpenAI companion independently from named Work Codex quota", async () => {
     const pi = await fixture();

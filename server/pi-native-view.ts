@@ -298,21 +298,21 @@ export class NativePiAccounts {
           const agent = targets[cursorIndex++];
           if (!agent) continue;
           try {
-            const provider = agent.model?.startsWith("openai-codex/")
+            const modelProvider = agent.model?.startsWith("openai-codex/")
               ? "openai-codex"
               : agent.model?.startsWith("openai/")
                 ? "openai"
                 : null;
-            if (!provider) {
+            if (!modelProvider) {
               unavailable++;
               continue;
             }
-            const status = await this.controls.status(
+            let status = await this.controls.status(
               {
                 agentId: agent.id,
                 workspaceId: agent.workspaceId,
-                ...(provider === "openai-codex"
-                  ? { providerId: provider }
+                ...(modelProvider === "openai-codex"
+                  ? { providerId: modelProvider }
                   : {}),
               },
               context,
@@ -321,8 +321,35 @@ export class NativePiAccounts {
               unavailable++;
               continue;
             }
-            const snapshot = status.snapshot;
+            let snapshot = status.snapshot;
+            let provider: NativeProvider = modelProvider;
+            const initialSessionId = status.sessionId;
+            const initialRuntimeEpoch = status.runtimeEpoch;
+            const initialRoute = snapshot.sessionRouting;
+            if (initialRoute?.version === 1 && initialRoute.providerId !== modelProvider) {
+              provider = initialRoute.providerId;
+              status = await this.controls.status(
+                { agentId: agent.id, workspaceId: agent.workspaceId, providerId: provider },
+                context,
+              );
+              if (!status.available || !status.snapshot ||
+                status.sessionId !== initialSessionId ||
+                status.runtimeEpoch !== initialRuntimeEpoch ||
+                status.snapshot.sessionRouting?.version !== 1 ||
+                status.snapshot.sessionRouting.providerId !== provider ||
+                status.snapshot.sessionRouting.revision !== initialRoute.revision) {
+                unavailable++;
+                continue;
+              }
+              snapshot = status.snapshot;
+            }
+            const route = snapshot.sessionRouting;
             if (
+              !status.sessionId ||
+              status.sessionId !== snapshot.sessionId ||
+              !status.runtimeEpoch ||
+              (route?.version === 1 && route.providerId !== provider) ||
+              (route?.version !== 1 && provider !== modelProvider) ||
               (snapshot.providerId ?? "openai") !== provider ||
               (provider === "openai-codex" &&
                 !snapshot.supportedProviders?.includes(provider))
@@ -587,7 +614,9 @@ export class NativePiAccounts {
       if (
         !status.available ||
         !status.snapshot ||
-        (status.snapshot.providerId ?? "openai") !== provider ||
+        ((status.snapshot.providerId ?? "openai") !== provider &&
+          !(status.snapshot.sessionRouting?.version === 1 &&
+            status.snapshot.supportedProviders?.includes(provider))) ||
         (provider === "openai-codex" &&
           !status.snapshot.supportedProviders?.includes(provider))
       )
@@ -638,19 +667,10 @@ export class NativePiAccounts {
       current.archivedAt
     )
       throw new Error("The selected Pi conversation is no longer available.");
-    const modelProvider =
-      typeof current.model === "string" &&
-      current.model.startsWith("openai-codex/")
-        ? "openai-codex"
-        : typeof current.model === "string" &&
-            current.model.startsWith("openai/")
-          ? "openai"
-          : null;
-    if (!modelProvider || modelProvider !== provider)
-      throw new Error(
-        `Choose a matching ${provider === "openai-codex" ? "Codex" : "OpenAI"} model first; account selection does not change the model provider.`,
-      );
-    const status = await this.controls.status(
+    const currentModelProvider = typeof current.model === "string" &&
+      current.model.startsWith("openai-codex/") ? "openai-codex" :
+      typeof current.model === "string" && current.model.startsWith("openai/") ? "openai" : null;
+    let status = await this.controls.status(
       {
         agentId,
         workspaceId: current.workspaceId,
@@ -662,14 +682,21 @@ export class NativePiAccounts {
       throw new Error(
         status.reason ?? "The selected Pi session has no live account bridge.",
       );
-    if (
-      (status.snapshot.providerId ?? "openai") !== provider ||
-      (provider === "openai-codex" &&
-        !status.snapshot.supportedProviders?.includes(provider))
+    let snapshot = status.snapshot;
+    if (!status.sessionId || !status.runtimeEpoch || status.sessionId !== snapshot.sessionId)
+      throw new Error("The Pi account service returned stale or missing session metadata; no switch was sent.");
+    let route = snapshot.sessionRouting;
+    if (route?.version !== 1 && currentModelProvider !== provider)
+      throw new Error("This older Pi account service cannot change providers; refresh Pi to a provider-aware version.");
+    if ((snapshot.providerId ?? "openai") !== provider && route?.version !== 1)
+      throw new Error("The Pi account service returned the wrong provider namespace; no switch was sent.");
+    if (route?.version !== 1) {
+      if ((snapshot.providerId ?? "openai") !== provider)
+        throw new Error("This older Pi account service cannot change providers; refresh Pi to a provider-aware version.");
+    } else if (
+      route.providerId !== provider && !snapshot.supportedProviders?.includes(provider)
     )
-      throw new Error(
-        "This Pi account service does not support the requested provider; no switch was sent.",
-      );
+      throw new Error("This Pi account service does not support the requested provider; no switch was sent.");
     if (name && !status.snapshot.accounts.some((a) => a.id === name))
       throw new Error(
         "That Pi account is not available in the live Pi session. Refresh its account manager and retry.",
@@ -692,6 +719,9 @@ export class NativePiAccounts {
           expectedSelectionRevision: status.snapshot.selectionRevision,
           accountId: name,
           providerId: provider,
+          ...(status.snapshot.sessionRouting?.version === 1
+            ? { expectedRoutingRevision: status.snapshot.sessionRouting.revision }
+            : {}),
         },
       },
       context,
