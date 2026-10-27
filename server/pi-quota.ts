@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import type { Usage } from "../shared/model";
+import { extractQuotaWindows, normalizeQuotaWindow, type QuotaWindowSlot } from "@getpaseo/plugin/shared";
 
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const MAX_RESPONSE_BYTES = 256 * 1024;
@@ -169,16 +170,13 @@ function usageWindow(
   id: string,
   label: string,
 ): Usage["windows"][number] | null {
-  const row = record(value);
-  const usedPercent = row?.used_percent;
-  const resetAt = row?.reset_at;
-  if (
-    typeof usedPercent !== "number" ||
-    !Number.isFinite(usedPercent) ||
-    usedPercent < 0 ||
-    usedPercent > 100
-  )
-    return null;
+  const normalized = normalizeQuotaWindow(value, {
+    usedPercent: "percentage",
+    resetAt: "epoch-seconds",
+  });
+  const usedPercent = normalized?.used_percent;
+  const resetAt = normalized?.reset_at;
+  if (usedPercent === undefined) return null;
   return {
     id,
     label,
@@ -194,13 +192,10 @@ function usageWindow(
 }
 
 function windowLabel(value: unknown, fallback: string): string {
-  const duration = record(value)?.limit_window_seconds;
-  if (
-    typeof duration !== "number" ||
-    !Number.isSafeInteger(duration) ||
-    duration <= 0
-  )
-    return fallback;
+  const duration = normalizeQuotaWindow(value, {
+    duration: "positive-safe-integer",
+  })?.limit_window_seconds;
+  if (duration === undefined) return fallback;
   if (duration === 604800) return "7-day";
   if (duration % 86400 === 0) return `${duration / 86400}-day`;
   if (duration % 3600 === 0) return `${duration / 3600}-hour`;
@@ -254,14 +249,17 @@ async function chatgptJson(
 function mapQuota(body: Record<string, unknown>): QuotaResult {
   const rate = record(body.rate_limit);
   const windows: Usage["windows"] = [];
-  for (const [slot, fallback] of [
-    ["primary_window", "Primary"],
-    ["secondary_window", "Secondary"],
-  ] as const) {
-    const source = rate?.[slot];
-    const mapped = usageWindow(source, slot, windowLabel(source, fallback));
-    if (mapped) windows.push(mapped);
-  }
+  windows.push(
+    ...extractQuotaWindows(
+      rate as Partial<Record<QuotaWindowSlot, unknown>> | undefined,
+      (source, slot) =>
+        usageWindow(
+          source,
+          slot,
+          windowLabel(source, slot === "primary_window" ? "Primary" : "Secondary"),
+        ) ?? undefined,
+    ),
+  );
   const additional = Array.isArray(body.additional_rate_limits)
     ? body.additional_rate_limits.slice(0, 100)
     : [];
@@ -272,18 +270,17 @@ function mapQuota(body: Record<string, unknown>): QuotaResult {
       `Additional ${index + 1}`,
     );
     const limits = record(row?.rate_limit);
-    for (const [slot, fallback] of [
-      ["primary_window", "Primary"],
-      ["secondary_window", "Secondary"],
-    ] as const) {
-      const source = limits?.[slot];
-      const mapped = usageWindow(
-        source,
-        `additional:${index}:${slot}`,
-        `${identity} · ${windowLabel(source, fallback)}`,
-      );
-      if (mapped) windows.push(mapped);
-    }
+    windows.push(
+      ...extractQuotaWindows(
+        limits as Partial<Record<QuotaWindowSlot, unknown>> | undefined,
+        (source, slot) =>
+          usageWindow(
+            source,
+            `additional:${index}:${slot}`,
+            `${identity} · ${windowLabel(source, slot === "primary_window" ? "Primary" : "Secondary")}`,
+          ) ?? undefined,
+      ),
+    );
   }
   if (!windows.length)
     return {

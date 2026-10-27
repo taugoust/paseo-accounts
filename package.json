@@ -39,7 +39,8 @@
     "OVERVIEW.md",
     "CHANGELOG.md",
     "images/",
-    "LICENSE"
+    "LICENSE",
+    "PASEO-LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
