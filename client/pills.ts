@@ -4,6 +4,7 @@ import type {
 	PluginButtonRegistration,
 	PluginClientContext,
 } from "@getpaseo/plugin/client";
+import { nativePillProvider } from "./pill-provider";
 import { formatPercent, peakUsage, shortLabel } from "../shared/format";
 import {
 	FAMILY_LABEL,
@@ -198,8 +199,7 @@ function buttonFor(
 	if (isPi && !route) return null;
 	const current =
 		accounts.find((account) => account.id === route?.accountId) ??
-		accounts.find((account) => account.isDefault) ??
-		accounts[0];
+		(isPi ? undefined : accounts.find((account) => account.isDefault) ?? accounts[0]);
 	if (!current) return null;
 	// A banked reset is worth offering right where the agent stopped, even with a single account.
 	const resets = current.usage?.resets ?? null;
@@ -345,7 +345,7 @@ function buttonFor(
 	return {
 		title: `Account: ${current.label}${current.email && current.email !== current.label ? ` (${current.email})` : ""}`,
 		icon: current.status === "limited" ? "CircleAlert" : "CircleUserRound",
-		label: `${shortLabel(current)}${pending}`,
+		label: `${isPi ? `${nativePillProvider(current.id) ?? familyLabel(family)} · ` : ""}${shortLabel(current)}${pending}`,
 		behavior: { kind: "menu", items },
 	};
 }
