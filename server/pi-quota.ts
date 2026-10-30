@@ -109,9 +109,10 @@ async function readPrivateJson(
 ): Promise<Record<string, unknown> | undefined> {
   try {
     const settings = file === "pi-usage.json";
-    const path = settings
-      ? await realpath(`${directory}/${file}`)
-      : `${directory}/${file}`;
+    // Home Manager links host-local auth.json through the Nix store to the
+    // private shared credential file. Resolve the link, then open the final
+    // target without following further links and validate its ownership/mode.
+    const path = await realpath(`${directory}/${file}`);
     const inNixStore = settings && path.startsWith("/nix/store/");
     const handle = await open(
       path,
