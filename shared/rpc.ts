@@ -165,12 +165,26 @@ export const forkAgent = defineRpc({
   output: z.object({ agentId: z.string(), title: z.string() }),
 });
 
+/** Changes only this live, idle Pi session to the destination provider's local default. */
+export const setAgentProvider = defineRpc({
+  name: "paseo-accounts.agents.provider",
+  input: z.object({
+    agentId: z.string(),
+    providerId: z.enum(["openai", "openai-codex"]),
+    /** Canonical source choice observed by the client; stale choices are skipped. */
+    expectedAccountId: z.string(),
+  }),
+  output: ReopenSummarySchema,
+});
+
 export const setAgentAccount = defineRpc({
   name: "paseo-accounts.agents.account",
   input: z.object({
     agentId: z.string(),
     /** `null` makes the agent follow the default account again. */
     accountId: z.string().nullable(),
+    /** No queued switches. Currently supported only by live, idle native Pi sessions. */
+    onlyIfIdle: z.boolean().optional(),
   }),
   output: ReopenSummarySchema,
 });

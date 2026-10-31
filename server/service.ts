@@ -2428,7 +2428,11 @@ export class Service {
 		paseo: PaseoApi,
 		agentId: string,
 		accountId: string | null,
+		onlyIfIdle = false,
 	): Promise<ReopenSummary> {
+		// No legacy adapter has an atomic idle-only reload. An idle refresh can race
+		// a new turn, and persisting a binding before reload would queue a later switch.
+		if (onlyIfIdle) return emptySummary();
 		this.attach(paseo);
 		const info = await agentInfo(paseo, agentId);
 		if (!info) throw new Error("That agent is no longer available.");

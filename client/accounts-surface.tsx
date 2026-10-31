@@ -166,7 +166,7 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
                   />
                 ))
               : null}
-            {tab === "agents" ? <AgentsTab theme={theme} state={state} families={families} store={store} onOpenAgent={openAgent} /> : null}
+            {tab === "agents" ? <AgentsTab theme={theme} state={state} families={families} store={store} sourceId={host.id} available={!offline} onOpenAgent={openAgent} /> : null}
             {tab === "projects" ? <ProjectsTab theme={theme} state={state} store={store} /> : null}
             {tab === "activity" ? <ActivityTab theme={theme} state={state} onOpenAgent={openAgent} /> : null}
             {tab === "settings" ? (

@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { AccountView, AgentRoute, StateView } from "../shared/model";
+import type { ReopenSummary } from "../shared/rpc";
 import { createAccountControlsHandlers } from "./pi-native";
 import { fetchPiQuota, quotaCredential, readQuotaAuthData } from "./pi-quota";
 import type { PiQuotaCredential, QuotaResult } from "./pi-quota";
@@ -629,11 +630,104 @@ export class NativePiAccounts {
       "No live Pi account service can verify Codex provider support.",
     );
   }
+  /** Explicit selected-session authorization includes replacing a source pin. */
+  async changeProvider(
+    agentId: string,
+    providerId: NativeProvider,
+    expectedAccountId: string,
+    context: PluginHandlerContext,
+  ): Promise<ReopenSummary> {
+    const skipped: ReopenSummary = { reopened: [], deferred: [], failed: [], continuedIn: null };
+    const sourceProvider: NativeProvider = expectedAccountId.startsWith(`${PREFIX}codex:`)
+      ? "openai-codex" : "openai";
+    const defaultId = accountId(null, sourceProvider);
+    const profilePrefix = sourceProvider === "openai-codex" ? `${PREFIX}codex:profile:` : `${PREFIX}profile:`;
+    let sourceName: string | null = null;
+    if (expectedAccountId !== defaultId) {
+      if (!expectedAccountId.startsWith(profilePrefix)) return skipped;
+      try { sourceName = decodeURIComponent(expectedAccountId.slice(profilePrefix.length)); }
+      catch { return skipped; }
+      if (!/^[A-Za-z0-9._-]{1,64}$/.test(sourceName) ||
+          accountId(sourceName, sourceProvider) !== expectedAccountId) return skipped;
+    }
+    try {
+      const current = (await context.paseo.agents.ref(agentId).refresh())?.agent;
+      if (!current || current.id !== agentId || current.provider !== "pi" || current.archivedAt ||
+          !current.workspaceId || !["idle", "error"].includes(current.status)) return skipped;
+      const target = { agentId, workspaceId: current.workspaceId };
+      const read = async (provider: NativeProvider) => {
+        const status = await this.controls.status({ ...target, providerId: provider }, context);
+        const s = status.snapshot;
+        if (!status.available || !s || !status.sessionId || !status.runtimeEpoch ||
+            status.sessionId !== s.sessionId || s.providerId !== provider ||
+            s.guardedDefaultSwitchVersion !== 1 || s.sessionRouting?.version !== 1 ||
+            s.sessionRouting.providerId !== sourceProvider ||
+            !s.supportedProviders?.includes(sourceProvider) || !s.supportedProviders.includes(providerId) ||
+            s.busy || !s.canSwitch || s.activationStatus === "activation-pending" ||
+            s.activationStatus === "activation-failed") return null;
+        return { ...status, snapshot: s };
+      };
+      type Status = NonNullable<Awaited<ReturnType<typeof read>>>;
+      const sameIdentity = (a: Status, b: Status) =>
+        a.sessionId === b.sessionId && a.runtimeEpoch === b.runtimeEpoch &&
+        a.snapshot.serviceEpoch === b.snapshot.serviceEpoch &&
+        a.snapshot.sessionRouting!.revision === b.snapshot.sessionRouting!.revision;
+      const sameSelection = (a: Status, b: Status) => sameIdentity(a, b) &&
+        a.snapshot.selectionRevision === b.snapshot.selectionRevision &&
+        a.snapshot.currentAccountId === b.snapshot.currentAccountId &&
+        a.snapshot.defaultSelected === b.snapshot.defaultSelected;
+      const matchesSource = (s: Status["snapshot"]) => sourceName === null
+        ? s.defaultSelected
+        : !s.defaultSelected && s.currentAccountId === sourceName;
+      const source = await read(sourceProvider);
+      if (!source || !matchesSource(source.snapshot)) return skipped;
+      if (providerId === sourceProvider && source.snapshot.defaultSelected) return skipped;
+      const destination = await read(providerId);
+      if (!destination || !sameIdentity(source, destination)) return skipped;
+      const latest = (await context.paseo.agents.ref(agentId).refresh())?.agent;
+      if (!latest || latest.id !== agentId || latest.provider !== "pi" || latest.archivedAt ||
+          latest.workspaceId !== target.workspaceId || !["idle", "error"].includes(latest.status)) return skipped;
+      const finalDestination = await read(providerId);
+      if (!finalDestination || !sameSelection(destination, finalDestination)) return skipped;
+      const finalSource = await read(sourceProvider);
+      if (!finalSource || !sameSelection(source, finalSource) ||
+          !sameIdentity(finalSource, finalDestination) || !matchesSource(finalSource.snapshot)) return skipped;
+      const result = await this.controls.switch({
+        ...target,
+        expectedSessionId: finalSource.sessionId!,
+        expectedRuntimeEpoch: finalSource.runtimeEpoch!,
+        request: {
+          protocol: 1, requestId: randomUUID(), providerId, accountId: null,
+          expectedSessionId: finalSource.sessionId!,
+          expectedServiceEpoch: finalSource.snapshot.serviceEpoch,
+          expectedSelectionRevision: finalDestination.snapshot.selectionRevision,
+          expectedRoutingRevision: finalSource.snapshot.sessionRouting!.revision,
+          ...(finalSource.snapshot.defaultSelected ? {
+            expectedDefaultSource: { providerId: sourceProvider, selectionRevision: finalSource.snapshot.selectionRevision },
+          } : {}),
+        },
+      }, context);
+      if (!result.ok && ["busy", "stale-selection", "stale-session", "stale-service"].includes(result.reason)) return skipped;
+      if (!result.ok || result.snapshot.sessionId !== finalSource.sessionId ||
+          result.snapshot.serviceEpoch !== finalSource.snapshot.serviceEpoch ||
+          result.snapshot.providerId !== providerId || result.snapshot.sessionRouting?.version !== 1 ||
+          result.snapshot.sessionRouting.providerId !== providerId ||
+          result.snapshot.sessionRouting.revision <= finalSource.snapshot.sessionRouting!.revision ||
+          !result.snapshot.defaultSelected ||
+          result.snapshot.activationStatus === "activation-pending" || result.snapshot.activationStatus === "activation-failed")
+        throw new Error("Unconfirmed provider change");
+      return { ...skipped, reopened: [agentId] };
+    } catch {
+      return { ...skipped, failed: [{ agentId, error: "Pi provider change was not confirmed. Refresh before retrying." }] };
+    }
+  }
   async switch(
     agentId: string,
     id: string | null,
     context: PluginHandlerContext,
+    onlyIfIdle = false,
   ) {
+    const skipped = { reopened: [], deferred: [], failed: [], continuedIn: null };
     const parsed =
       id === null
         ? { provider: "openai" as NativeProvider, name: null }
@@ -660,6 +754,9 @@ export class NativePiAccounts {
       throw new Error("Choose a Pi account from the canonical list.");
     const { provider, name } = parsed;
     const current = (await context.paseo.agents.ref(agentId).refresh())?.agent;
+    if (onlyIfIdle && (!current || current.provider !== "pi" ||
+        !["idle", "error"].includes(current.status) || !current.workspaceId || current.archivedAt))
+      return skipped;
     if (
       !current ||
       current.provider !== "pi" ||
@@ -678,11 +775,19 @@ export class NativePiAccounts {
       },
       context,
     );
+    if (onlyIfIdle && (!status.available || !status.snapshot)) return skipped;
     if (!status.available || !status.snapshot)
       throw new Error(
         status.reason ?? "The selected Pi session has no live account bridge.",
       );
     let snapshot = status.snapshot;
+    if (onlyIfIdle && (snapshot.busy || !snapshot.canSwitch ||
+        snapshot.activationStatus === "activation-pending" ||
+        snapshot.activationStatus === "activation-failed" ||
+        snapshot.guardedDefaultSwitchVersion !== 1 ||
+        snapshot.sessionRouting?.version !== 1 ||
+        snapshot.sessionRouting.providerId !== provider))
+      return skipped;
     if (!status.sessionId || !status.runtimeEpoch || status.sessionId !== snapshot.sessionId)
       throw new Error("The Pi account service returned stale or missing session metadata; no switch was sent.");
     let route = snapshot.sessionRouting;
@@ -726,6 +831,9 @@ export class NativePiAccounts {
       },
       context,
     );
+    if (onlyIfIdle && result.ok !== true &&
+        ["busy", "stale-selection", "stale-session", "stale-service"].includes(result.reason))
+      return skipped;
     if (result.ok !== true)
       throw new Error(
         `Pi account switch failed (${result.reason}); refresh before retrying.`,

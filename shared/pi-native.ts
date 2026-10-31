@@ -21,6 +21,9 @@ export const piSnapshotSchema = z
     sessionId: z.string().min(1).max(256),
     accounts: z.array(account).max(100),
     providerId: z.enum(["openai", "openai-codex"]).optional(),
+    /** Atomic source-default guard supported by the installed Pi producer. */
+    guardedDefaultSwitchVersion: z.literal(1).optional(),
+    inheritance: z.enum(["inherited", "explicit"]).optional(),
     sessionRouting: z.object({
       version: z.literal(1),
       providerId: z.enum(["openai", "openai-codex"]),
@@ -77,6 +80,10 @@ const request = z
     expectedServiceEpoch: z.string().min(1).max(256),
     expectedSelectionRevision: z.number().int().nonnegative(),
     expectedRoutingRevision: z.number().int().nonnegative().optional(),
+    expectedDefaultSource: z.object({
+      providerId: z.enum(["openai", "openai-codex"]),
+      selectionRevision: z.number().int().nonnegative(),
+    }).strict().optional(),
     accountId: z.string().min(1).max(256).nullable(),
     providerId: z.enum(["openai", "openai-codex"]).optional(),
   })

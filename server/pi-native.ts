@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
 import { StringDecoder } from "node:string_decoder";
+import { validateDefaultProviderSwitch } from "./pi-provider-guard";
 import type { RpcInput } from "@getpaseo/plugin";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import {
@@ -350,7 +351,8 @@ export function createAccountControlsHandlers() {
       if (
         !validDescriptor(d, input.agentId) ||
         d.sessionId !== input.expectedSessionId ||
-        d.runtimeEpoch !== input.expectedRuntimeEpoch
+        d.runtimeEpoch !== input.expectedRuntimeEpoch ||
+        d.serviceEpoch !== input.request.expectedServiceEpoch
       )
         throw new Error(
           "The active Pi session changed. Refresh before switching accounts.",
@@ -387,6 +389,20 @@ export function createAccountControlsHandlers() {
           throw new Error(
             "Pi session changed during Codex preflight; no switch was sent.",
           );
+      }
+      if (input.request.expectedDefaultSource) {
+        await validateDefaultProviderSwitch(input, async (providerId) =>
+          piSnapshotSchema.parse(await callBridge(d, {
+            operation: "snapshot", sessionId: d.sessionId, providerId,
+          })),
+        );
+        await validate(input, context);
+        const latest = await readDescriptor(input.agentId);
+        if (!validDescriptor(latest, input.agentId) ||
+            latest.sessionId !== d.sessionId ||
+            latest.runtimeEpoch !== d.runtimeEpoch ||
+            latest.serviceEpoch !== d.serviceEpoch)
+          throw new Error("Pi service changed during default-only provider preflight; no switch was sent.");
       }
       const parsed = piSwitchResultSchema.parse(
         await callBridge(d, { operation: "switch", request: input.request }),

@@ -41,6 +41,7 @@ import {
   signOutAccount,
   renameAccount,
   setAgentAccount,
+  setAgentProvider,
   setDefaultAccount,
   setAccountEnabled,
   setAccountFolders,
@@ -271,11 +272,19 @@ export default function contribute(server: PluginServerContext) {
     refusePiManagement(accountId);
     return service.redeem(paseo, accountId, agentId);
   });
-  server.handle(setAgentAccount, async ({ agentId, accountId }, context) => {
+  server.handle(setAgentProvider, ({ agentId, providerId, expectedAccountId }, context) =>
+    nativePi.changeProvider(agentId, providerId, expectedAccountId, context),
+  );
+  server.handle(setAgentAccount, async ({ agentId, accountId, onlyIfIdle }, context) => {
     const agent = (await context.paseo.agents.ref(agentId).refresh())?.agent;
+    // Legacy reloads cannot atomically reject a turn starting after this refresh.
+    // Guarded/bulk calls therefore support only the native Pi bridge, never queued bindings.
+    if (onlyIfIdle && (!agent || agent.provider !== "pi" ||
+        !["idle", "error"].includes(agent.status) || agent.archivedAt))
+      return { reopened: [], deferred: [], failed: [], continuedIn: null };
     if (!agent) throw new Error("Conversation is no longer available.");
     if (agent.provider === "pi")
-      return nativePi.switch(agentId, accountId, context);
+      return nativePi.switch(agentId, accountId, context, onlyIfIdle);
     if (accountId) refusePiManagement(accountId);
     return service.setAgentAccount(context.paseo, agentId, accountId);
   });
