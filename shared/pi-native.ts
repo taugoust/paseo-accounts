@@ -153,4 +153,19 @@ export const piAccountManageRpc = defineRpc({
     .object({ ok: z.literal(true), accountId: z.string().optional() })
     .strict(),
 });
+export const piApplyProviderRpc = defineRpc({
+  name: "paseo-accounts.pi.provider.apply",
+  // No agent/account/host IDs: discovery and changes stay on this daemon.
+  input: z.object({ providerId: z.enum(["openai", "openai-codex"]), apply: z.boolean() }).strict(),
+  output: z.object({
+    providerId: z.enum(["openai", "openai-codex"]), apply: z.boolean(),
+    eligibleCount: z.number().int().nonnegative(), defaultAccountCount: z.number().int().nonnegative(),
+    currentProvider: z.enum(["openai", "openai-codex", "mixed"]).nullable(),
+    applied: z.array(z.string()),
+    /** Optional for compatibility with early v2 host responses. */
+    skipped: z.array(z.object({ agentId: z.string(), reason: z.string() })).optional(),
+    failed: z.array(z.object({ agentId: z.string(), error: z.string() })),
+    pinnedCount: z.number().int().nonnegative(), alreadySelectedCount: z.number().int().nonnegative(), discoveryComplete: z.boolean(),
+  }).strict(),
+});
 export type PiNativeSnapshot = z.infer<typeof piSnapshotSchema>;

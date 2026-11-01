@@ -16,7 +16,7 @@ import {
   NativePiAccounts,
   refusePiManagement,
 } from "./server/pi-native-view";
-import { piAccountManageRpc } from "./shared/pi-native";
+import { piAccountManageRpc, piApplyProviderRpc } from "./shared/pi-native";
 function nativePiIdentity(id: string) {
   if (id === "pi-native:default")
     return { providerId: "openai" as const, accountId: null };
@@ -148,6 +148,7 @@ export default function contribute(server: PluginServerContext) {
       };
     }
   });
+  server.handle(piApplyProviderRpc, (input, context) => nativePi.applyProvider(input, context));
   server.handle(piAccountManageRpc, async (input, context) => {
     const result = await nativePi.manage(input, context);
     return {

@@ -7,6 +7,7 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { AccountView, AgentRoute, StateView } from "../shared/model";
 import type { ReopenSummary } from "../shared/rpc";
 import { createAccountControlsHandlers } from "./pi-native";
+import { applyPiProvider } from "./pi-provider";
 import { fetchPiQuota, quotaCredential, readQuotaAuthData } from "./pi-quota";
 import type { PiQuotaCredential, QuotaResult } from "./pi-quota";
 
@@ -186,6 +187,9 @@ export class NativePiAccounts {
   private readonly controls: ReturnType<typeof createAccountControlsHandlers>;
   constructor(controls = createAccountControlsHandlers()) {
     this.controls = controls;
+  }
+  applyProvider(input: Parameters<typeof applyPiProvider>[0], context: PluginHandlerContext) {
+    return applyPiProvider(input, context, this.controls);
   }
   private readonly quotaCache = new Map<
     string,
