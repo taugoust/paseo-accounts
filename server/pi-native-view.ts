@@ -145,7 +145,7 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
           return [
             {
               id,
-              label: `${label} (Codex)`,
+              label,
               authKind:
                 type === "api_key" ? ("api-key" as const) : ("oauth" as const),
               isDefault: selected === id,

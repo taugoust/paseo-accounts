@@ -164,7 +164,7 @@ describe("Codex-only native Pi accounts", () => {
       "pi-native:codex:default",
       "pi-native:codex:profile:work",
     ]);
-    expect(rows.map((a) => a.label)).toEqual(["Codex", "Work (Codex)"]);
+    expect(rows.map((a) => a.label)).toEqual(["Codex", "Work"]);
     expect(rows.find((a) => a.id === "pi-native:codex:profile:work")).toMatchObject({
       isDefault: true,
       plan: "Codex · plus",
