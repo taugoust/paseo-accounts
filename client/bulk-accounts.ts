@@ -1,33 +1,26 @@
 import type { AccountView, AgentRoute, StateView } from "../shared/model";
-import { setAgentAccount, setAgentProvider, type ReopenSummary } from "../shared/rpc";
+import { setAgentAccount, type ReopenSummary } from "../shared/rpc";
 import type { AccountsStore } from "./store";
 
-/** Native account IDs encode a provider namespace, not merely an account label. */
-function piProvider(id: string): "openai" | "openai-codex" | null {
-  for (const [prefix, provider] of [
-    ["pi-native:", "openai"],
-    ["pi-native:codex:", "openai-codex"],
-  ] as const) {
-    if (id === `${prefix}default`) return provider;
-    if (!id.startsWith(`${prefix}profile:`)) continue;
-    const name = id.slice(`${prefix}profile:`.length);
-    try {
-      if (name && encodeURIComponent(decodeURIComponent(name)) === name) return provider;
-    } catch {
-      // Malformed/noncanonical IDs are not safe bulk targets.
-    }
+/** Canonical native Pi (Codex) account IDs only. */
+function isPiAccount(id: string): boolean {
+  if (id === "pi-native:codex:default") return true;
+  const prefix = "pi-native:codex:profile:";
+  if (!id.startsWith(prefix)) return false;
+  const name = id.slice(prefix.length);
+  try {
+    return !!name && encodeURIComponent(decodeURIComponent(name)) === name;
+  } catch {
+    // Malformed/noncanonical IDs are not safe bulk targets.
+    return false;
   }
-  return null;
 }
 
 /** Null means that this route has no known, unambiguous source account. */
 export function bulkGroup(agent: AgentRoute, state: StateView): string | null {
   const source = state.accounts.find((account) => account.id === agent.accountId);
   if (!source || source.family !== agent.family || !agent.provider) return null;
-  if (agent.family === "pi") {
-    const provider = piProvider(source.id);
-    return provider ? JSON.stringify([agent.family, agent.provider, provider]) : null;
-  }
+  if (agent.family === "pi" && !isPiAccount(source.id)) return null;
   return JSON.stringify([agent.family, agent.provider]);
 }
 
@@ -43,12 +36,12 @@ export function eligible(agent: AgentRoute, state: StateView): boolean {
   );
 }
 
-/** Ready host-local accounts only, never Pi OpenAI/Codex cross-provider targets. */
+/** Ready host-local accounts only, and only canonical ones for Pi. */
 export function compatibleAccounts(agent: AgentRoute, state: StateView): AccountView[] {
   if (bulkGroup(agent, state) === null) return [];
   return state.accounts.filter((account) =>
     account.family === agent.family && account.status === "ready" &&
-    (agent.family !== "pi" || piProvider(account.id) === piProvider(agent.accountId)),
+    (agent.family !== "pi" || isPiAccount(account.id)),
   );
 }
 
@@ -84,55 +77,28 @@ function currentSource(check: () => boolean | void): boolean {
   }
 }
 
-/** Account moves must stay within one source provider namespace. */
-export function bulkChangeAccounts(
+/**
+ * Account moves must stay within one provider. One captured store, exact local IDs,
+ * sequential fresh preflights. The caller must fence its captured host/selection
+ * lifetime, including disconnect/reconnect.
+ * Only Pi execution is eligible: its native switch supports an atomic idle guard.
+ * Other providers cannot guarantee skip-not-queue and must not dispatch here.
+ */
+export async function bulkChangeAccounts(
   store: BulkStore,
   selected: readonly AgentRoute[],
   targetId: string,
   isCurrentSource: () => boolean | void,
 ): Promise<BulkChangeResult> {
-  return bulkChange(store, selected, { kind: "account", accountId: targetId }, isCurrentSource);
-}
-
-/**
- * Provider moves allow mixed native Pi namespaces and replace explicit selected
- * pins. The server resolves the target provider's default, never a copied account.
- */
-export function bulkChangeProvider(
-  store: BulkStore,
-  selected: readonly AgentRoute[],
-  providerId: "openai" | "openai-codex",
-  isCurrentSource: () => boolean | void,
-): Promise<BulkChangeResult> {
-  return bulkChange(store, selected, { kind: "provider", providerId }, isCurrentSource);
-}
-
-type BulkTarget =
-  | { kind: "account"; accountId: string }
-  | { kind: "provider"; providerId: "openai" | "openai-codex" };
-
-/**
- * One captured store, exact local IDs, sequential fresh preflights. The caller must
- * fence its captured host/selection lifetime, including disconnect/reconnect.
- * Only Pi execution is eligible: its native switch supports an atomic idle guard.
- * Other providers cannot guarantee skip-not-queue and must not dispatch here.
- */
-async function bulkChange(
-  store: BulkStore,
-  selected: readonly AgentRoute[],
-  target: BulkTarget,
-  isCurrentSource: () => boolean | void,
-): Promise<BulkChangeResult> {
   const initial = store.current;
   const selections = selected.map((agent) => ({
     agentId: agent.agentId,
-    accountId: agent.accountId,
     fingerprint: fingerprint(agent),
     group: initial.state ? bulkGroup(agent, initial.state) : null,
     matchesSource: initial.state?.agents.some((row) => fingerprint(row) === fingerprint(agent)) ?? false,
   }));
   const groups = new Set(selections.map((selection) => selection.group));
-  const mixed = target.kind === "account" && groups.size > 1;
+  const mixed = groups.size > 1;
   const results: BulkAgentResult[] = [];
   const seen = new Set<string>();
   const add = (agentId: string, outcome: BulkAgentResult["outcome"], reason: string, summary?: ReopenSummary) => {
@@ -186,17 +152,12 @@ async function bulkChange(
       add(agentId, "skipped", "Agent lacks guarded bulk switching, is busy, pending or requires a new conversation.");
       continue;
     }
-    if (target.kind === "account") {
-      if (!compatibleAccounts(agent, state).some((account) => account.id === target.accountId)) {
-        add(agentId, "skipped", "Target account is unavailable or incompatible.");
-        continue;
-      }
-      if (agent.accountId === target.accountId) {
-        add(agentId, "skipped", "Already using that account.");
-        continue;
-      }
-    } else if (target.providerId !== "openai" && target.providerId !== "openai-codex") {
-      add(agentId, "skipped", "Target provider is unavailable or incompatible.");
+    if (!compatibleAccounts(agent, state).some((account) => account.id === targetId)) {
+      add(agentId, "skipped", "Target account is unavailable or incompatible.");
+      continue;
+    }
+    if (agent.accountId === targetId) {
+      add(agentId, "skipped", "Already using that account.");
       continue;
     }
     if (!currentSource(isCurrentSource)) {
@@ -204,11 +165,9 @@ async function bulkChange(
       continue;
     }
     try {
-      const summary = target.kind === "account"
-        ? await store.rpc(setAgentAccount, { agentId, accountId: target.accountId, onlyIfIdle: true })
-        : await store.rpc(setAgentProvider, {
-          agentId, providerId: target.providerId, expectedAccountId: selection.accountId,
-        });
+      const summary = await store.rpc(setAgentAccount, {
+        agentId, accountId: targetId, onlyIfIdle: true,
+      });
       const failure = summary.failed.find((row) => row.agentId === agentId);
       if (failure) {
         add(agentId, "failed", failure.error, summary);
@@ -217,9 +176,7 @@ async function bulkChange(
       } else if (summary.deferred.includes(agentId)) {
         add(agentId, "skipped", "Server deferred the change after preflight; it has not moved yet.", summary);
       } else if (summary.reopened.includes(agentId)) {
-        add(agentId, "changed", target.kind === "account"
-          ? "Reopened on the selected account."
-          : "Reopened on the selected provider's default account.", summary);
+        add(agentId, "changed", "Reopened on the selected account.", summary);
       } else {
         add(agentId, "skipped", "Server did not confirm an in-place change.", summary);
       }

@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
 import type { Usage } from "../shared/model";
 import { extractQuotaWindows, normalizeQuotaWindow, type QuotaWindowSlot } from "@getpaseo/plugin/shared";
 
@@ -7,28 +7,16 @@ const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const MAX_RESPONSE_BYTES = 256 * 1024;
 
 export type PiQuotaCredential =
-  | {
-      kind: "oauth";
-      access: string;
-      expires: number;
-      accountId?: string;
-      clientId?: string;
-      scopes?: string[];
-    }
+  | { kind: "oauth"; access: string; expires: number; accountId?: string }
   | { kind: "api-key" };
 
 export type QuotaAuthData = {
-  defaultCredential?: PiQuotaCredential;
   codexDefaultCredential?: PiQuotaCredential;
-  companionCredential?: PiQuotaCredential;
-  companionUsageEnabled: boolean;
 };
 
 export type QuotaResult = {
   usage: Usage | null;
   plan: string | null;
-  source?: "openai" | "codex" | "codex-companion";
-  identityVerified?: boolean;
 };
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -86,34 +74,22 @@ export function quotaCredential(
   )
     return undefined;
   const accountId = storedAccountId ?? claimedAccountId;
-  const clientId = safeIdentity(credential.clientId);
-  const scopes = Array.isArray(credential.scopes)
-    ? credential.scopes.flatMap((scope) => {
-        const valid = safeIdentity(scope);
-        return valid ? [valid] : [];
-      })
-    : undefined;
   return {
     kind: "oauth",
     access: credential.access,
     expires: credential.expires,
     ...(accountId ? { accountId } : {}),
-    ...(clientId ? { clientId } : {}),
-    ...(scopes ? { scopes } : {}),
   };
 }
 
-async function readPrivateJson(
+async function readAuthJson(
   directory: string,
-  file: "auth.json" | "pi-usage.json",
 ): Promise<Record<string, unknown> | undefined> {
   try {
-    const settings = file === "pi-usage.json";
     // Home Manager links host-local auth.json through the Nix store to the
     // private shared credential file. Resolve the link, then open the final
     // target without following further links and validate its ownership/mode.
-    const path = await realpath(`${directory}/${file}`);
-    const inNixStore = settings && path.startsWith("/nix/store/");
+    const path = await realpath(`${directory}/auth.json`);
     const handle = await open(
       path,
       constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
@@ -123,8 +99,8 @@ async function readPrivateJson(
       if (
         !stat.isFile() ||
         (typeof process.getuid === "function" &&
-          stat.uid !== (inNixStore ? 0 : process.getuid())) ||
-        (stat.mode & (settings ? 0o022 : 0o077)) !== 0 ||
+          stat.uid !== process.getuid()) ||
+        (stat.mode & 0o077) !== 0 ||
         stat.size > 1024 * 1024
       )
         return undefined;
@@ -140,15 +116,9 @@ async function readPrivateJson(
 export async function readQuotaAuthData(
   directory: string,
 ): Promise<QuotaAuthData> {
-  const [auth, settings] = await Promise.all([
-    readPrivateJson(directory, "auth.json"),
-    readPrivateJson(directory, "pi-usage.json"),
-  ]);
+  const auth = await readAuthJson(directory);
   return {
-    defaultCredential: quotaCredential(auth?.openai, true),
     codexDefaultCredential: quotaCredential(auth?.["openai-codex"], true),
-    companionCredential: quotaCredential(auth?.["openai-codex"], true),
-    companionUsageEnabled: settings?.openaiUseCodexUsage === true,
   };
 }
 
@@ -206,9 +176,8 @@ function windowLabel(value: unknown, fallback: string): string {
 async function chatgptJson(
   access: string,
   accountId: string,
-  path = "",
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(`${USAGE_URL}${path}`, {
+  const response = await fetch(USAGE_URL, {
     headers: {
       Authorization: `Bearer ${access}`,
       "ChatGPT-Account-Id": accountId,
@@ -302,118 +271,12 @@ function mapQuota(body: Record<string, unknown>): QuotaResult {
       typeof body.plan_type === "string"
         ? quotaText(body.plan_type, "ChatGPT")
         : null,
-    source: "openai",
   };
 }
 
-async function fetchCompanionQuota(
-  native: Extract<PiQuotaCredential, { kind: "oauth" }>,
-  companion: Extract<PiQuotaCredential, { kind: "oauth" }>,
-  nativeAccountId: string | undefined,
-  allowUnverifiedIdentity: boolean,
-): Promise<QuotaResult> {
-  const companionClaim = accountIdFromAccess(companion.access);
-  if (
-    companion.accountId &&
-    companionClaim &&
-    companion.accountId !== companionClaim
-  )
-    return {
-      usage: usageError(
-        "OpenAI and Codex logins do not match; quota was not attributed.",
-      ),
-      plan: null,
-    };
-  const companionAccountId = companion.accountId ?? companionClaim;
-  if (
-    !companionAccountId ||
-    (nativeAccountId !== undefined && companionAccountId !== nativeAccountId) ||
-    (nativeAccountId === undefined && !allowUnverifiedIdentity)
-  )
-    return {
-      usage: usageError(
-        "OpenAI and Codex logins do not match; quota was not attributed.",
-      ),
-      plan: null,
-    };
-  if (!native.clientId || !native.scopes?.includes("chatgpt.tokens.use.direct"))
-    return {
-      usage: usageError(
-        "This Pi profile has no verified native usage registration.",
-      ),
-      plan: null,
-    };
-  const apps = await chatgptJson(
-    companion.access,
-    companionAccountId,
-    "/chatpass/apps",
-  );
-  const items = apps.items;
-  if (
-    Object.keys(apps).some(
-      (key) => !["items", "has_more", "next_cursor"].includes(key),
-    ) ||
-    !Array.isArray(items) ||
-    items.length > 128 ||
-    (apps.has_more !== undefined && apps.has_more !== false) ||
-    (apps.next_cursor !== undefined &&
-      apps.next_cursor !== null &&
-      apps.next_cursor !== "")
-  )
-    return {
-      usage: usageError("The Codex companion app list is incomplete."),
-      plan: null,
-    };
-  const parsedApps = items.map(record);
-  if (
-    parsedApps.some(
-      (app) => !app || typeof app.id !== "string" || !app.id.trim(),
-    )
-  )
-    return {
-      usage: usageError("The Codex companion app list is invalid."),
-      plan: null,
-    };
-  const matching = parsedApps.filter((app) => app?.id === native.clientId);
-  if (
-    matching.length !== 1 ||
-    !Array.isArray(matching[0]?.windows) ||
-    matching[0].windows.length === 0 ||
-    matching[0].windows.length > 32
-  )
-    return {
-      usage: usageError(
-        "The Pi profile was not uniquely matched to a Codex companion app.",
-      ),
-      plan: null,
-    };
-  return {
-    ...mapQuota(await chatgptJson(companion.access, companionAccountId)),
-    source: "codex-companion",
-    identityVerified: nativeAccountId === companionAccountId,
-  };
-}
-
-function accountIdFromAccess(access: string): string | undefined {
-  try {
-    const claims = JSON.parse(
-      Buffer.from(access.split(".")[1] ?? "", "base64url").toString("utf8"),
-    );
-    return safeIdentity(
-      claims?.["https://api.openai.com/auth"]?.chatgpt_account_id ??
-        claims?.chatgpt_account_id,
-    );
-  } catch {
-    return undefined;
-  }
-}
-
+/** Reads usage directly with the Codex credential's own ChatGPT account. */
 export async function fetchPiQuota(
   credential: PiQuotaCredential | undefined,
-  companionCredential?: PiQuotaCredential,
-  companionUsageEnabled = false,
-  allowUnverifiedCompanionIdentity = false,
-  provider: "openai" | "openai-codex" = "openai",
 ): Promise<QuotaResult> {
   if (!credential) return { usage: null, plan: null };
   if (credential.kind === "api-key")
@@ -430,56 +293,15 @@ export async function fetchPiQuota(
       ),
       plan: null,
     };
-  const accountId =
-    credential.accountId ?? accountIdFromAccess(credential.access);
+  const accountId = credential.accountId ?? accountIdClaim(credential.access);
+  if (!accountId)
+    return {
+      usage: usageError(
+        "ChatGPT account identity is unavailable for this profile.",
+      ),
+      plan: null,
+    };
   try {
-    if (provider === "openai-codex") {
-      if (!accountId)
-        return {
-          usage: usageError(
-            "ChatGPT account identity is unavailable for this profile.",
-          ),
-          plan: null,
-        };
-      return {
-        ...mapQuota(await chatgptJson(credential.access, accountId)),
-        source: "codex",
-      };
-    }
-    if (
-      credential.clientId &&
-      credential.scopes?.includes("chatgpt.tokens.use.direct")
-    ) {
-      if (!companionUsageEnabled)
-        return {
-          usage: usageError("Codex companion usage is disabled in Pi."),
-          plan: null,
-        };
-      if (
-        !companionCredential ||
-        companionCredential.kind !== "oauth" ||
-        companionCredential.expires <= Date.now()
-      )
-        return {
-          usage: usageError(
-            "A matching OpenAI Codex companion login is unavailable.",
-          ),
-          plan: null,
-        };
-      return await fetchCompanionQuota(
-        credential,
-        companionCredential,
-        accountId,
-        allowUnverifiedCompanionIdentity,
-      );
-    }
-    if (!accountId)
-      return {
-        usage: usageError(
-          "ChatGPT account identity is unavailable for this profile.",
-        ),
-        plan: null,
-      };
     return mapQuota(await chatgptJson(credential.access, accountId));
   } catch (error) {
     return {

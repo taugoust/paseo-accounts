@@ -89,9 +89,3 @@ export async function selectCompatible(page) {
   for (const title of ['Review API integration', 'Write onboarding guide', 'Refactor settings page']) await page.getByRole('checkbox', { name: `Select ${title}`, exact: true }).click();
   await page.getByRole('button', { name: 'Change account… (3)', exact: true }).waitFor();
 }
-export async function selectMixedProviders(page) {
-  await selectCompatible(page);
-  await page.getByRole('checkbox', { name: 'Select Pi ChatGPT review', exact: true }).click();
-  await page.getByRole('button', { name: 'Change provider… (4)', exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Cancel selection', exact: true }).scrollIntoViewIfNeeded();
-}

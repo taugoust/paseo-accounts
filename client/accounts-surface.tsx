@@ -8,7 +8,6 @@ import { AccountRow, SectionLabel } from "./account-row";
 import { ActivityTab } from "./activity-tab";
 import { AddAccountModal } from "./add-account";
 import { AgentsTab } from "./agents-tab";
-import { MultiHostActions } from "./multi-host";
 import { CapacityStrip } from "./capacity";
 import { ProjectsTab } from "./projects-tab";
 import { PreferenceSections } from "./settings-screen";
@@ -96,7 +95,6 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
                 busy={refreshing}
                 onPress={() => void refreshUsage()}
               />
-              {multiHost ? <MultiHostActions theme={theme} sourceHostId={host.id} /> : null}
               <Button theme={theme} size="small" tone="primary" icon="Plus" label="Add account" onPress={() => setChoosing(true)} />
             </View>
           ) : null}

@@ -8,7 +8,6 @@ import {
   TextInput,
   useToast,
 } from "@getpaseo/plugin/client/react-native";
-import { SettingsSelect } from "@getpaseo/plugin/client/ui";
 import {
   useCallback,
   useEffect,
@@ -64,13 +63,8 @@ export function AddAccountModal({
   );
   const [loginId, setLoginId] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
-  const [piProvider, setPiProvider] = useState<"openai" | "openai-codex">(() =>
-    accountId?.startsWith("pi-native:codex:") ? "openai-codex" : "openai",
-  );
   const [piName, setPiName] = useState(() => {
-    const prefix = accountId?.startsWith("pi-native:codex:profile:")
-      ? "pi-native:codex:profile:"
-      : "pi-native:profile:";
+    const prefix = "pi-native:codex:profile:";
     return accountId?.startsWith(prefix)
       ? decodeURIComponent(accountId.slice(prefix.length))
       : "";
@@ -92,7 +86,6 @@ export function AddAccountModal({
         const login = await store.rpc(startLogin, {
           family,
           accountId,
-          ...(family === "pi" ? { providerId: piProvider } : {}),
           method: next,
         });
         // The modal closed (or a newer start replaced this one) before the daemon answered.
@@ -108,7 +101,7 @@ export function AddAccountModal({
           setStartError(describe(error));
       }
     },
-    [store, family, accountId, piProvider],
+    [store, family, accountId],
   );
 
   useEffect(() => {
@@ -118,7 +111,7 @@ export function AddAccountModal({
   useEffect(() => store.watchClosely(), [store]);
   useEffect(() => {
     if (family !== "pi" || !piPendingName) return;
-    const profileId = `pi-native:${piProvider === "openai-codex" ? "codex:" : ""}profile:${encodeURIComponent(piPendingName)}`;
+    const profileId = `pi-native:codex:profile:${encodeURIComponent(piPendingName)}`;
     const pending =
       state?.logins.some(
         (item) =>
@@ -143,7 +136,7 @@ export function AddAccountModal({
         "Pi sign-in ended without saving the account. Check the Pi sign-in prompt and try again.",
       );
     }
-  }, [family, onClose, piPendingName, piProvider, state]);
+  }, [family, onClose, piPendingName, state]);
 
   const login = state?.logins.find((entry) => entry.id === loginId) ?? null;
   const account = login?.accountId
@@ -180,21 +173,19 @@ export function AddAccountModal({
         .rpc(piAccountManageRpc, {
           operation: "cancel-login",
           accountName: piPendingName,
-          providerId: piProvider,
         })
         .catch(() => undefined);
     setPiPendingName(null);
     onClose();
   };
-  const addPiAccount = async (method: "oauth" | "api_key") => {
+  const addPiAccount = async () => {
     setPiBusy(true);
     setPiError(null);
     try {
       const result = await store.rpc(piAccountManageRpc, {
         operation: "add",
         accountName: piName.trim(),
-        method,
-        providerId: piProvider,
+        method: "oauth",
       });
       piSawPending.current = false;
       setPiPendingName(result.accountId ?? piName.trim());
@@ -215,19 +206,9 @@ export function AddAccountModal({
         }}
       >
         <Modal.Content>
-          <SettingsSelect<"openai" | "openai-codex">
-            label="Pi provider"
-            value={piProvider}
-            options={[
-              { label: "OpenAI", value: "openai" },
-              { label: "OpenAI Codex", value: "openai-codex" },
-            ]}
-            onValueChange={setPiProvider}
-            disabled={piBusy || !!piPendingName}
-          />
           <Text style={text.body}>
-            Uses the existing pi-accounts store. Pi must be idle; credentials
-            stay in Pi’s protected account file.
+            Adds a Codex profile to the existing pi-accounts store. Pi must be
+            idle; credentials stay in Pi’s protected account file.
           </Text>
           <TextInput
             accessibilityLabel="Pi account name"
@@ -275,20 +256,11 @@ export function AddAccountModal({
                 tone="primary"
                 icon="KeyRound"
                 label="ChatGPT sign-in"
-                tooltip={piProvider === "openai-codex" ? "Sign in through Pi’s native Codex OAuth" : "Sign in through Pi’s native OpenAI OAuth"}
+                tooltip="Sign in through Pi’s native Codex OAuth"
                 tooltipAlign="end"
                 disabled={!piName.trim()}
-                onPress={() => void addPiAccount("oauth")}
+                onPress={() => void addPiAccount()}
               />
-              {piProvider === "openai" ? <Button
-                theme={theme}
-                icon="Key"
-                label="API key"
-                tooltip="Add an OpenAI API key through Pi’s secure prompt"
-                tooltipAlign="end"
-                disabled={!piName.trim()}
-                onPress={() => void addPiAccount("api_key")}
-              /> : null}
             </Row>
           )}
         </Modal.Content>

@@ -17,8 +17,10 @@ test('quota auth accepts managed links but rejects unsafe targets and broken lin
   await writeFile(target,JSON.stringify({openai:{type:'oauth',access:'test-openai',expires:Date.now()+60000},'openai-codex':{type:'oauth',access:'test-codex',expires:Date.now()+60000}}),{mode:0o600});
   await symlink(target,join(dir,'managed'));await symlink(join(dir,'managed'),link);
   let auth=await readQuotaAuthData(dir);
-  assert.equal(auth.defaultCredential.access,'test-openai');assert.equal(auth.codexDefaultCredential.access,'test-codex');
-  await chmod(target,0o644);auth=await readQuotaAuthData(dir);assert.equal(auth.defaultCredential,undefined);assert.equal(auth.codexDefaultCredential,undefined);
-  await rm(target);assert.equal((await readQuotaAuthData(dir)).defaultCredential,undefined);
+  assert.deepEqual(Object.keys(auth),['codexDefaultCredential']);
+  assert.equal(auth.codexDefaultCredential.access,'test-codex');
+  await chmod(target,0o644);auth=await readQuotaAuthData(dir);
+  assert.equal(auth.codexDefaultCredential,undefined);
+  await rm(target);assert.equal((await readQuotaAuthData(dir)).codexDefaultCredential,undefined);
  }finally{await rm(dir,{recursive:true,force:true});}
 });

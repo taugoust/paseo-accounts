@@ -11,6 +11,7 @@ import type { Reopener } from "./reopen";
 import { Service } from "./service";
 import { MAIN_ACCOUNT_ID, StateStore, StoredAccountSchema } from "./state";
 const empty = { reopened: [], deferred: [], failed: [], continuedIn: null };
+const TARGET = "pi-native:codex:profile:target";
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 async function legacy() {
@@ -32,10 +33,13 @@ async function legacy() {
   return { store, service, agent, paseo: paseo as never, refresh, reopen };
 }
 function native(patch: Partial<PiNativeSnapshot> = {}) {
-  const agent = { id: "a", provider: "pi", workspaceId: "workspace", status: "idle", archivedAt: null as string | null, model: "openai/model" };
+  const agent = {
+    id: "a", provider: "pi", workspaceId: "workspace", status: "idle",
+    archivedAt: null as string | null, model: "openai-codex/model",
+  };
   let current: PiNativeSnapshot = {
-    protocol: 1, sessionId: "session", serviceEpoch: "service", selectionRevision: 3, providerId: "openai", guardedDefaultSwitchVersion: 1,
-    sessionRouting: { version: 1, providerId: "openai", revision: 5 }, supportedProviders: ["openai", "openai-codex"],
+    protocol: 1, sessionId: "session", serviceEpoch: "service", selectionRevision: 3,
+    providerId: "openai-codex",
     accounts: [{ id: "target", label: "Target", authKind: "oauth" }], currentAccountId: null, defaultSelected: true,
     activationStatus: "active", busy: false, canSwitch: true,
     usage: { effectiveCredential: "unknown", status: "unknown", remoteEntitlement: "not-queried", settingsUrl: null }, ...patch,
@@ -87,44 +91,74 @@ describe("onlyIfIdle legacy exclusion", () => {
 describe("onlyIfIdle native Pi admission", () => {
   it.each(["idle", "error"])("retains explicit %s in-place switches (including selected pins)", async (status) => {
     const h = native({ currentAccountId: "old-pin", defaultSelected: false }); h.agent.status = status;
-    expect(await h.service.switch("a", "pi-native:profile:target", h.context, true)).toMatchObject({ reopened: ["a"], deferred: [] });
+    expect(await h.service.switch("a", TARGET, h.context, true))
+      .toMatchObject({ reopened: ["a"], deferred: [] });
     expect(h.state().currentAccountId).toBe("target"); expect(h.switchFn).toHaveBeenCalledOnce();
+  });
+  it("names the Codex provider on every status and switch request", async () => {
+    const h = native();
+    await h.service.switch("a", TARGET, h.context, true);
+    expect(h.status).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "openai-codex" }), h.context);
+    expect(h.switchFn).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: "openai-codex",
+      request: expect.objectContaining({ providerId: "openai-codex", accountId: "target" }),
+    }), h.context);
+  });
+  it("switches back to the Codex default login", async () => {
+    const h = native({ currentAccountId: "target", defaultSelected: false });
+    expect(await h.service.switch("a", "pi-native:codex:default", h.context, true))
+      .toMatchObject({ reopened: ["a"] });
+    expect(h.state().currentAccountId).toBeNull();
+  });
+  it("leaves Pi agents on openai/ models alone", async () => {
+    const h = native(); h.agent.model = "openai/gpt-5";
+    expect(await h.service.switch("a", TARGET, h.context, true)).toEqual(empty);
+    await expect(h.service.switch("a", TARGET, h.context)).rejects.toThrow(/Codex model/);
+    expect(h.status).not.toHaveBeenCalled(); expect(h.switchFn).not.toHaveBeenCalled();
+  });
+  it("refuses account IDs outside the Codex namespace", async () => {
+    const h = native();
+    for (const id of ["pi-native:default", "pi-native:profile:target"])
+      await expect(h.service.switch("a", id, h.context)).rejects.toThrow(/canonical list/);
+    expect(h.switchFn).not.toHaveBeenCalled();
   });
   it.each(["running", "initializing", "closed", "disconnected"])("rechecks fresh Pi %s status", async (status) => {
     const h = native(); h.agent.status = status;
-    expect(await h.service.switch("a", "pi-native:profile:target", h.context, true)).toEqual(empty); expect(h.status).not.toHaveBeenCalled(); expect(h.switchFn).not.toHaveBeenCalled();
+    expect(await h.service.switch("a", TARGET, h.context, true)).toEqual(empty);
+    expect(h.status).not.toHaveBeenCalled(); expect(h.switchFn).not.toHaveBeenCalled();
   });
-  it.each([{ busy: true }, { canSwitch: false }, { activationStatus: "activation-pending" as const }, { activationStatus: "activation-failed" as const },
-    { guardedDefaultSwitchVersion: undefined }, { sessionRouting: undefined }, { sessionRouting: { version: 1 as const, providerId: "openai-codex" as const, revision: 5 } }])
-    ("skips busy, pending, old-capability, or wrong namespace snapshots: %j", async (patch) => {
-      const h = native(patch); expect(await h.service.switch("a", "pi-native:profile:target", h.context, true)).toEqual(empty);
+  it.each([{ busy: true }, { canSwitch: false },
+    { activationStatus: "activation-pending" as const },
+    { activationStatus: "activation-failed" as const }])
+    ("skips busy or pending snapshots: %j", async (patch) => {
+      const h = native(patch);
+      expect(await h.service.switch("a", TARGET, h.context, true)).toEqual(empty);
       expect(h.switchFn).not.toHaveBeenCalled(); expect(h.state().currentAccountId).toBeNull();
     });
   it("allows inactive default activation when live bridge can switch", async () => {
     const h = native({ activationStatus: "inactive" });
-    expect(await h.service.switch("a", "pi-native:profile:target", h.context, true)).toMatchObject({ reopened: ["a"] });
+    expect(await h.service.switch("a", TARGET, h.context, true)).toMatchObject({ reopened: ["a"] });
     expect(h.state().currentAccountId).toBe("target"); expect(h.switchFn).toHaveBeenCalledOnce();
   });
   it("skips disconnected bridge", async () => {
     const h = native(); h.status.mockResolvedValue({ available: false, reason: "disconnected", sessionId: "session", runtimeEpoch: "11111111-1111-4111-8111-111111111111", snapshot: null } as never);
-    expect(await h.service.switch("a", "pi-native:profile:target", h.context, true)).toEqual(empty); expect(h.switchFn).not.toHaveBeenCalled();
+    expect(await h.service.switch("a", TARGET, h.context, true)).toEqual(empty);
+    expect(h.switchFn).not.toHaveBeenCalled();
   });
   it("leaves no selection or pending activation when Pi becomes busy after snapshot", async () => {
     const h = native(); h.afterSnapshot(() => { h.state().busy = true; });
-    expect(await h.service.switch("a", "pi-native:profile:target", h.context, true)).toEqual(empty);
+    expect(await h.service.switch("a", TARGET, h.context, true)).toEqual(empty);
     expect(h.switchFn).toHaveBeenCalledOnce(); expect(h.state()).toMatchObject({ currentAccountId: null, selectionRevision: 3, activationStatus: "active" });
   });
   it("never rolls back a concurrent Pi user selection after stale rejection", async () => {
     const h = native(); h.afterSnapshot(() => { Object.assign(h.state(), { currentAccountId: "user-choice", selectionRevision: 4, defaultSelected: false }); });
-    expect(await h.service.switch("a", "pi-native:profile:target", h.context, true)).toEqual(empty);
+    expect(await h.service.switch("a", TARGET, h.context, true)).toEqual(empty);
     expect(h.switchFn).toHaveBeenCalledOnce(); expect(h.state()).toMatchObject({ currentAccountId: "user-choice", selectionRevision: 4, activationStatus: "active" });
   });
   it("still throws on a legacy Pi busy race", async () => {
     const h = native(); h.afterSnapshot(() => { h.state().busy = true; });
-    await expect(h.service.switch("a", "pi-native:profile:target", h.context)).rejects.toThrow(/busy/); expect(h.state().currentAccountId).toBeNull();
-  });
-  it("does not apply the capability exclusion to legacy Pi callers", async () => {
-    const h = native({ guardedDefaultSwitchVersion: undefined });
-    expect(await h.service.switch("a", "pi-native:profile:target", h.context)).toMatchObject({ reopened: ["a"] });
+    await expect(h.service.switch("a", TARGET, h.context)).rejects.toThrow(/busy/);
+    expect(h.state().currentAccountId).toBeNull();
   });
 });

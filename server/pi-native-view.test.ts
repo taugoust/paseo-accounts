@@ -36,6 +36,11 @@ async function accounts(pi: string, data: unknown) {
     mode: 0o600,
   });
 }
+const oauth = (accountId: string, email?: string) => ({
+  type: "oauth",
+  access: token(accountId, email),
+  expires: Date.now() + 600000,
+});
 const state = () =>
   ({
     accounts: [],
@@ -55,278 +60,176 @@ const context = () =>
       },
     },
   }) as never;
-describe("provider-aware native Pi accounts", () => {
-  it("leaves claude-bridge agents to the Claude section without a warning", async () => {
+const agent = (id: string, model: string) => ({
+  agent: {
+    id,
+    provider: "pi",
+    model,
+    status: "idle",
+    workspaceId: "w",
+    cwd: "/w",
+    title: null,
+    archivedAt: null,
+  },
+});
+const withAgents = (...entries: ReturnType<typeof agent>[]) =>
+  ({
+    paseo: {
+      agents: { list: async () => ({ entries, pageInfo: { hasMore: false } }) },
+    },
+  }) as never;
+const NOT_CONNECTED = "Pi sessions are not connected to the live account switcher";
+describe("Codex-only native Pi accounts", () => {
+  it("leaves claude-bridge and openai/ agents alone: no route and no warning", async () => {
     await fixture();
     vi.stubGlobal("fetch", async () => new Response("{}", { status: 500 }));
-    const agent = (id: string, model: string) => ({
-      agent: { id, provider: "pi", model, status: "idle", workspaceId: "w", cwd: "/w", archivedAt: null },
-    });
     const status = vi.fn(async () => ({ available: false }));
-    const ctx = {
-      paseo: {
-        agents: {
-          list: async () => ({
-            entries: [agent("bridge", "claude-bridge/claude-opus-5-5"), agent("other", "local/llama")],
-            pageInfo: { hasMore: false },
-          }),
-        },
-      },
-    } as never;
-    const out = await new NativePiAccounts({ status } as never).view(state(), ctx, true);
+    const out = await new NativePiAccounts({ status } as never).view(
+      state(),
+      withAgents(
+        agent("bridge", "claude-bridge/claude-opus-5-5"),
+        agent("plain", "openai/gpt-5"),
+        agent("other", "local/llama"),
+      ),
+      true,
+    );
     expect(status).not.toHaveBeenCalled();
     expect(out.agents).toEqual([]);
-    expect(out.warnings).toContain(
-      "1 Pi sessions are not connected to the live account switcher; their current selection is left unknown.",
-    );
+    // Only the local model counts as not connected.
+    expect(out.warnings.filter((warning) => warning.includes(NOT_CONNECTED))).toEqual([
+      `1 ${NOT_CONNECTED}; their current selection is left unknown.`,
+    ]);
   });
-  it("keeps same-name OpenAI/Codex profiles distinct and represents both defaults", async () => {
+  it("gives openai/ agents no route and no warning next to a connected Codex agent", async () => {
+    await fixture();
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 500 }));
+    const calls: unknown[] = [];
+    const controls = {
+      status: async (input: unknown) => {
+        calls.push(input);
+        return {
+          available: true,
+          sessionId: "s",
+          runtimeEpoch: "e",
+          reason: null,
+          snapshot: {
+            sessionId: "s",
+            providerId: "openai-codex",
+            accounts: [],
+            currentAccountId: null,
+            canSwitch: true,
+          },
+        };
+      },
+    } as never;
+    const out = await new NativePiAccounts(controls).view(
+      state(),
+      withAgents(agent("codex", "openai-codex/gpt-5"), agent("plain", "openai/gpt-5")),
+      true,
+    );
+    expect(calls).toEqual([{ agentId: "codex", workspaceId: "w", providerId: "openai-codex" }]);
+    expect(out.agents.map((route) => route.agentId)).toEqual(["codex"]);
+    expect(out.agents[0]?.accountId).toBe("pi-native:codex:default");
+    expect(out.warnings.some((warning) => warning.includes(NOT_CONNECTED))).toBe(false);
+  });
+  it("shows only the Codex default login and Codex profiles, with their own usage", async () => {
     const pi = await fixture();
-    await credentials(pi, {
-      openai: {
-        type: "oauth",
-        access: token("personal"),
-        expires: Date.now() + 600000,
-      },
-      "openai-codex": {
-        type: "oauth",
-        access: token("work"),
-        expires: Date.now() + 600000,
-      },
-    });
+    await credentials(pi, { openai: oauth("personal"), "openai-codex": oauth("codex-default") });
     await accounts(pi, {
       providers: {
         openai: {
           active: "work",
-          accounts: {
-            work: {
-              type: "oauth",
-              access: token("personal"),
-              expires: Date.now() + 600000,
-              label: "Personal",
-            },
-          },
+          accounts: { work: { ...oauth("personal"), label: "Personal" } },
         },
         "openai-codex": {
           active: "work",
-          accounts: {
-            work: {
-              type: "oauth",
-              access: token("work"),
-              expires: Date.now() + 600000,
-              label: "Work",
-            },
-          },
+          accounts: { work: { ...oauth("work"), label: "Work" } },
         },
       },
     });
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      async (_url: string, init: { headers: Record<string, string> }) => {
+        seen.push(init.headers["ChatGPT-Account-Id"] ?? "");
+        return Response.json({
+          plan_type: "plus",
+          rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 3600 } },
+        });
+      },
+    );
     const out = await new NativePiAccounts().view(state(), context(), true);
     const rows = out.accounts.filter((a) => a.family === "pi");
-    expect(rows.map((a) => a.id)).toContain("pi-native:profile:work");
-    expect(rows.map((a) => a.id)).toContain("pi-native:codex:profile:work");
-    expect(rows.map((a) => a.id)).toContain("pi-native:default");
-    expect(rows.map((a) => a.id)).toContain("pi-native:codex:default");
-    expect(rows.find((a) => a.id === "pi-native:profile:work")?.label).toBe(
-      "Personal",
-    );
-    expect(
-      rows.find((a) => a.id === "pi-native:codex:profile:work")?.label,
-    ).toBe("Work (Codex)");
+    expect(rows.map((a) => a.id)).toEqual([
+      "pi-native:codex:default",
+      "pi-native:codex:profile:work",
+    ]);
+    expect(rows.map((a) => a.label)).toEqual(["Codex", "Work"]);
+    expect(rows.find((a) => a.id === "pi-native:codex:profile:work")).toMatchObject({
+      isDefault: true,
+      plan: "Codex · plus",
+    });
+    expect(rows.every((a) => a.usage?.windows.length === 1)).toBe(true);
+    expect(seen.sort()).toEqual(["codex-default", "work"]);
+    expect(out.nextUp.pi).toBe("pi-native:codex:profile:work");
   });
-  it("labels the Codex default and derives its email safely without changing OpenAI identity", async () => {
+  it("labels the Codex default and derives its email safely", async () => {
     const pi = await fixture();
     await credentials(pi, {
-      openai: { type: "oauth", access: token("personal", "openai@example.test"), expires: Date.now() + 600000 },
-      "openai-codex": { type: "oauth", access: token("work", "codex@example.test"), expires: Date.now() + 600000 },
+      openai: oauth("personal", "openai@example.test"),
+      "openai-codex": oauth("work", "codex@example.test"),
     });
     const out = await new NativePiAccounts().view(state(), context(), true);
-    const codex = out.accounts.find((a) => a.id === "pi-native:codex:default");
-    const openai = out.accounts.find((a) => a.id === "pi-native:default");
-    expect(out.warnings.some((warning) => warning.includes("Automatic Pi failover is intentionally disabled"))).toBe(false);
-    expect(codex).toMatchObject({ label: "Codex", email: "codex@example.test" });
-    expect(openai).toMatchObject({ label: "Default Pi login", email: null });
+    expect(out.accounts.filter((a) => a.family === "pi")).toEqual([
+      expect.objectContaining({
+        id: "pi-native:codex:default",
+        label: "Codex",
+        email: "codex@example.test",
+        isDefault: true,
+      }),
+    ]);
+    expect(out.nextUp.pi).toBe("pi-native:codex:default");
 
     await credentials(pi, {
-      openai: { type: "oauth", access: token("personal"), expires: Date.now() + 600000 },
       "openai-codex": { type: "oauth", access: "malformed", expires: Date.now() + 600000 },
     });
     const withoutEmail = await new NativePiAccounts().view(state(), context(), true);
     expect(withoutEmail.accounts.find((a) => a.id === "pi-native:codex:default"))
       .toMatchObject({ label: "Codex", email: null });
   });
-  it("fails closed on Codex management when no provider-aware service exists", async () => {
-    const calls: string[] = [];
-    const ctx = {
-      paseo: {
-        agents: {
-          list: async () => ({ entries: [], pageInfo: { hasMore: false } }),
-        },
-      },
-    } as never;
-    const controls = new NativePiAccounts();
+  it("needs an idle Pi session to manage accounts", async () => {
     await expect(
-      controls.manage(
-        { operation: "default", providerId: "openai-codex" },
-        ctx,
+      new NativePiAccounts().manage({ operation: "default" }, context()),
+    ).rejects.toThrow(/No idle Pi session/);
+  });
+  it("sends management to the Codex provider", async () => {
+    const manage = vi.fn(async () => ({ ok: true }));
+    await new NativePiAccounts({ manage } as never).manage(
+      { operation: "default", accountId: "work" },
+      context(),
+    );
+    expect(manage).toHaveBeenCalledWith(
+      { operation: "default", accountId: "work", providerId: "openai-codex" },
+      expect.anything(),
+    );
+  });
+  it("only checks Codex agents before removing an account", async () => {
+    const status = vi.fn(async () => ({
+      available: true,
+      snapshot: { providerId: "openai-codex", currentAccountId: "work" },
+    }));
+    const manage = vi.fn(async () => ({ ok: true }));
+    const native = new NativePiAccounts({ status, manage } as never);
+    await native.manage(
+      { operation: "remove", accountId: "work" },
+      withAgents(agent("plain", "openai/gpt-5")),
+    );
+    expect(status).not.toHaveBeenCalled();
+    await expect(
+      native.manage(
+        { operation: "remove", accountId: "work" },
+        withAgents(agent("codex", "openai-codex/gpt-5")),
       ),
-    ).rejects.toThrow(/No live Pi account service/);
-    expect(calls).toEqual([]);
-  });
-  it("routes OpenAI and Codex agents by authoritative model prefix", async () => {
-    const calls: string[] = [];
-    const contextWithAgents = {
-      paseo: {
-        agents: {
-          list: async () => ({
-            entries: [
-              {
-                agent: {
-                  id: "work-agent",
-                  provider: "pi",
-                  model: "openai-codex/gpt-5",
-                  workspaceId: "w",
-                  cwd: "/w",
-                  title: null,
-                  status: "idle",
-                  archivedAt: null,
-                },
-              },
-              {
-                agent: {
-                  id: "personal-agent",
-                  provider: "pi",
-                  model: "openai/gpt-5",
-                  workspaceId: "p",
-                  cwd: "/p",
-                  title: null,
-                  status: "idle",
-                  archivedAt: null,
-                },
-              },
-            ],
-            pageInfo: { hasMore: false },
-          }),
-        },
-      },
-    } as never;
-    const controls = {
-      status: async (input: { agentId: string; providerId?: string }) => {
-        const codex = (input.providerId ?? "openai") === "openai-codex";
-        calls.push(`${input.agentId}:${input.providerId ?? "openai"}`);
-        return {
-          available: true,
-          sessionId: "s",
-          runtimeEpoch: "e",
-          snapshot: {
-            sessionId: "s",
-            providerId: codex ? "openai-codex" : "openai",
-            sessionRouting: { version: 1, providerId: codex ? "openai-codex" : "openai", revision: 1 },
-            supportedProviders: ["openai", "openai-codex"],
-            accounts: [{ id: "work", label: "Work", authKind: "oauth" }],
-            currentAccountId: "work",
-            canSwitch: true,
-            pendingAccountNames: [],
-          },
-          reason: null,
-        };
-      },
-    } as never;
-    const out = await new NativePiAccounts(controls).view(
-      state(),
-      contextWithAgents,
-      true,
-    );
-    expect(calls).toContain("work-agent:openai-codex");
-    expect(calls).toContain("personal-agent:openai");
-    expect(out.agents.find((a) => a.agentId === "work-agent")?.accountId).toBe(
-      "pi-native:codex:profile:work",
-    );
-    expect(
-      out.agents.find((a) => a.agentId === "personal-agent")?.accountId,
-    ).toBe("pi-native:profile:work");
-  });
-  it("switches providers with committed routing capability, regardless of model alias", async () => {
-    const calls: any[] = [];
-    let routing: any = { version: 1, providerId: "openai", revision: 4 };
-    const controls = {
-      status: async (input: any) => ({ available: true, sessionId: "s", runtimeEpoch: "e", reason: null, snapshot: {
-        protocol: 1, sessionId: "s", serviceEpoch: "svc", selectionRevision: 2,
-        providerId: input.providerId ?? "openai", sessionRouting: routing,
-        supportedProviders: ["openai", "openai-codex"], accounts: input.providerId === "openai-codex" ? [{ id: "work", label: "Work", authKind: "oauth" }] : [{ id: "alpha", label: "Alpha", authKind: "oauth" }],
-        currentAccountId: null, defaultSelected: true, activationStatus: "active", busy: false, canSwitch: true,
-        usage: { effectiveCredential: "unknown", status: "unknown", remoteEntitlement: "not-queried", settingsUrl: null }, pendingAccountNames: [],
-      }}),
-      switch: async (input: any) => { calls.push(input.request); routing = { ...routing, providerId: input.request.providerId, revision: routing.revision + 1 }; return { ok: true, snapshot: { providerId: routing.providerId, supportedProviders: ["openai", "openai-codex"] } }; },
-    } as never;
-    const ctx = { paseo: { agents: { ref: () => ({ refresh: async () => ({ agent: { id: "a", provider: "pi", workspaceId: "w", model: "openai/guard-alias", archivedAt: null } }) }), list: async () => ({ entries: [{ agent: { id: "a", provider: "pi", workspaceId: "w", status: "idle", archivedAt: null } }], pageInfo: { hasMore: false } }) } } } as never;
-    const service = new NativePiAccounts(controls);
-    await service.switch("a", "pi-native:codex:profile:work", ctx);
-    expect(calls[0]).toMatchObject({ providerId: "openai-codex", expectedRoutingRevision: 4 });
-    await service.switch("a", "pi-native:profile:alpha", ctx);
-    expect(calls[1]).toMatchObject({ providerId: "openai", expectedRoutingRevision: 5 });
-  });
-  it("refuses cross-provider changes on legacy runtimes and stale/missing identities", async () => {
-    const ctx = { paseo: { agents: { ref: () => ({ refresh: async () => ({ agent: { id: "a", provider: "pi", workspaceId: "w", model: "openai/guard", archivedAt: null } }) }) } } } as never;
-    const legacy = { status: async () => ({ available: true, sessionId: "s", runtimeEpoch: "e", snapshot: { sessionId: "s", providerId: "openai", accounts: [], canSwitch: true } }), switch: vi.fn() } as never;
-    await expect(new NativePiAccounts(legacy).switch("a", "pi-native:codex:default", ctx)).rejects.toThrow(/older Pi account service/);
-    const stale = { status: async () => ({ available: true, sessionId: "other", runtimeEpoch: "e", snapshot: { sessionId: "s", providerId: "openai", sessionRouting: { version: 1, providerId: "openai", revision: 1 }, accounts: [], canSwitch: true } }) } as never;
-    await expect(new NativePiAccounts(stale).switch("a", "pi-native:default", ctx)).rejects.toThrow(/stale or missing session metadata/);
-  });
-  it("uses root Codex auth for OpenAI companion independently from named Work Codex quota", async () => {
-    const pi = await fixture();
-    await credentials(pi, {
-      openai: {
-        type: "oauth",
-        access: token("personal"),
-        expires: Date.now() + 600000,
-        clientId: "native",
-        scopes: ["chatgpt.tokens.use.direct"],
-      },
-      "openai-codex": {
-        type: "oauth",
-        access: token("personal"),
-        expires: Date.now() + 600000,
-      },
-    });
-    await accounts(pi, {
-      providers: {
-        "openai-codex": {
-          accounts: {
-            work: {
-              type: "oauth",
-              access: token("work"),
-              expires: Date.now() + 600000,
-            },
-          },
-        },
-      },
-    });
-    await writeFile(
-      join(pi, "pi-usage.json"),
-      JSON.stringify({ openaiUseCodexUsage: true }),
-      { mode: 0o600 },
-    );
-    const seen: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      async (_url: string, init: { headers: Record<string, string> }) => {
-        seen.push(init.headers["ChatGPT-Account-Id"] ?? "");
-        return new Response(
-          JSON.stringify({
-            plan_type: "Plus",
-            rate_limit: {
-              primary_window: { used_percent: 10, limit_window_seconds: 3600 },
-            },
-          }),
-          { status: 200 },
-        );
-      },
-    );
-    const out = await new NativePiAccounts().view(state(), context(), true);
-    expect(seen).toContain("personal");
-    expect(seen).toContain("work");
-    expect(
-      out.accounts.find((a) => a.id === "pi-native:codex:profile:work")?.usage,
-    ).not.toBeNull();
+    ).rejects.toThrow(/Switch every live Pi session/);
   });
 });

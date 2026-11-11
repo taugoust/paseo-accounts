@@ -6,12 +6,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
 import { StringDecoder } from "node:string_decoder";
-import { validateDefaultProviderSwitch } from "./pi-provider-guard";
 import type { RpcInput } from "@getpaseo/plugin";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import {
   accountControlsStatusRpc,
   accountControlsSwitchRpc,
+  PI_PROVIDER,
   piSnapshotSchema,
   piSwitchResultSchema,
 } from "../shared/pi-native";
@@ -222,41 +222,15 @@ export function createAccountControlsHandlers() {
         const d = await readDescriptor(agent.id);
         if (!validDescriptor(d, agent.id)) continue;
         try {
-          if (request.providerId === "openai-codex") {
-            const preflight = piSnapshotSchema.parse(
-              await callBridge(d, {
-                operation: "snapshot",
-                sessionId: d.sessionId,
-                providerId: "openai-codex",
-              }),
-            );
-            if (
-              preflight.providerId !== "openai-codex" ||
-              !preflight.supportedProviders?.includes("openai-codex")
-            )
-              throw new Error(
-                "Pi service does not support Codex management; no mutation was sent.",
-              );
-            await validate(
-              { agentId: agent.id, workspaceId: agent.workspaceId! },
-              context,
-            );
-            const latest = await readDescriptor(agent.id);
-            if (
-              !validDescriptor(latest, agent.id) ||
-              latest.sessionId !== d.sessionId ||
-              latest.runtimeEpoch !== d.runtimeEpoch ||
-              latest.serviceEpoch !== d.serviceEpoch
-            )
-              throw new Error(
-                "Pi session changed during Codex preflight; no management request was sent.",
-              );
-          }
           const result = await callBridge(
             d,
             {
               operation: "manage",
-              request: { ...request, sessionId: d.sessionId },
+              request: {
+                ...request,
+                providerId: PI_PROVIDER,
+                sessionId: d.sessionId,
+              },
             },
             15 * 60_000,
           );
@@ -295,24 +269,14 @@ export function createAccountControlsHandlers() {
             "Native Pi account controls are unavailable. Use /accounts in the Pi terminal for unsupported account management.",
         };
       try {
-        const requestedProvider = input.providerId ?? "openai";
+        // The schema only accepts Codex snapshots, so a mismatched provider fails here.
         const snapshot = piSnapshotSchema.parse(
           await callBridge(d, {
             operation: "snapshot",
             sessionId: d.sessionId,
-            ...(input.providerId ? { providerId: input.providerId } : {}),
+            providerId: PI_PROVIDER,
           }),
         );
-        const returnedProvider = snapshot.providerId ?? "openai";
-        if (returnedProvider !== requestedProvider)
-          throw new Error("Pi service returned a mismatched provider.");
-        if (
-          requestedProvider === "openai-codex" &&
-          !snapshot.supportedProviders?.includes(requestedProvider)
-        )
-          throw new Error(
-            "Pi service does not support Codex provider queries.",
-          );
         await validate(input, context);
         const latest = await readDescriptor(input.agentId);
         if (
@@ -357,64 +321,12 @@ export function createAccountControlsHandlers() {
         throw new Error(
           "The active Pi session changed. Refresh before switching accounts.",
         );
-      const requestedProvider = input.request.providerId ?? "openai";
-      if (requestedProvider === "openai-codex" && !input.request.providerId)
-        throw new Error("Codex provider identity is required.");
-      if (requestedProvider === "openai-codex") {
-        const preflight = piSnapshotSchema.parse(
-          await callBridge(d, {
-            operation: "snapshot",
-            sessionId: d.sessionId,
-            providerId: "openai-codex",
-          }),
-        );
-        if (
-          preflight.providerId !== "openai-codex" ||
-          !preflight.supportedProviders?.includes("openai-codex") ||
-          preflight.serviceEpoch !== input.request.expectedServiceEpoch ||
-          preflight.selectionRevision !==
-            input.request.expectedSelectionRevision
-        )
-          throw new Error(
-            "Codex provider support or selection changed; no switch was sent.",
-          );
-        await validate(input, context);
-        const latest = await readDescriptor(input.agentId);
-        if (
-          !validDescriptor(latest, input.agentId) ||
-          latest.sessionId !== d.sessionId ||
-          latest.runtimeEpoch !== d.runtimeEpoch ||
-          latest.serviceEpoch !== d.serviceEpoch
-        )
-          throw new Error(
-            "Pi session changed during Codex preflight; no switch was sent.",
-          );
-      }
-      if (input.request.expectedDefaultSource) {
-        await validateDefaultProviderSwitch(input, async (providerId) =>
-          piSnapshotSchema.parse(await callBridge(d, {
-            operation: "snapshot", sessionId: d.sessionId, providerId,
-          })),
-        );
-        await validate(input, context);
-        const latest = await readDescriptor(input.agentId);
-        if (!validDescriptor(latest, input.agentId) ||
-            latest.sessionId !== d.sessionId ||
-            latest.runtimeEpoch !== d.runtimeEpoch ||
-            latest.serviceEpoch !== d.serviceEpoch)
-          throw new Error("Pi service changed during default-only provider preflight; no switch was sent.");
-      }
       const parsed = piSwitchResultSchema.parse(
-        await callBridge(d, { operation: "switch", request: input.request }),
+        await callBridge(d, {
+          operation: "switch",
+          request: { ...input.request, providerId: PI_PROVIDER },
+        }),
       );
-      if (
-        (parsed.snapshot.providerId ?? "openai") !== requestedProvider ||
-        (requestedProvider === "openai-codex" &&
-          !parsed.snapshot.supportedProviders?.includes(requestedProvider))
-      )
-        throw new Error(
-          "Pi service returned a mismatched provider after switch.",
-        );
       if (
         parsed.requestId !== input.request.requestId ||
         parsed.snapshot.sessionId !== d.sessionId ||

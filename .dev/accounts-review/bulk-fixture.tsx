@@ -23,23 +23,27 @@ const compiled = factory((name: string) => {
 const baseAccount = { ...sample.accounts[0], usage: null, trend: [], forecast: null, folders: [], email: null, plan: null, agentCount: 0 };
 const account = (id: string, family: string, label: string, status = 'ready') => ({ ...baseAccount, id, family, label, kind: 'managed', status, isDefault: false });
 const baseAgent = { ...sample.agents[1], family: 'pi', provider: 'pi', status: 'idle', canSwitch: true, pinned: false, pendingAccountId: null, movable: true };
-const agent = (agentId: string, title: string, extra = {}) => ({ ...baseAgent, agentId, title, accountId: 'pi-native:default', ...extra });
+const CODEX = 'pi-native:codex:default', PROFILE = 'pi-native:codex:profile:';
+const agent = (agentId: string, title: string, extra = {}) =>
+  ({ ...baseAgent, agentId, title, accountId: CODEX, ...extra });
 const state = compiled.parseState({ ...sample,
   accounts: [account('claude-work', 'claude', 'Work'), account('claude-personal', 'claude', 'Personal'), account('claude-limited', 'claude', 'Unavailable team', 'limited'),
-    account('pi-native:default', 'pi', 'OpenAI Default'), account('pi-native:profile:Work', 'pi', 'OpenAI Work'), account('pi-native:profile:personal', 'pi', 'OpenAI Personal'), account('pi-native:profile:limited', 'pi', 'OpenAI Unavailable', 'limited'), account('pi-native:codex:default', 'pi', 'ChatGPT Personal')],
+    account(CODEX, 'pi', 'Codex Default'), account(`${PROFILE}Work`, 'pi', 'Codex Work'),
+    account(`${PROFILE}personal`, 'pi', 'Codex Personal'),
+    account(`${PROFILE}limited`, 'pi', 'Codex Unavailable', 'limited')],
   agents: [
-    agent('pinned', 'Review API integration', { pinned: true, accountId: 'pi-native:profile:Work' }),
-    agent('pi-codex', 'Pi ChatGPT review', { family: 'pi', provider: 'pi', accountId: 'pi-native:codex:default' }),
+    agent('pinned', 'Review API integration', { pinned: true, accountId: `${PROFILE}Work` }),
     agent('becomes-busy', 'Write onboarding guide'),
     agent('fails', 'Refactor settings page'),
     agent('busy', 'Working checkout fix', { status: 'running' }),
-    agent('pending', 'Pending account restart', { pendingAccountId: 'pi-native:profile:personal' }),
+    agent('pending', 'Pending account restart', { pendingAccountId: `${PROFILE}personal` }),
     agent('blocked', 'Unavailable live switcher', { canSwitch: false }),
     agent('unknown', 'Missing source account', { accountId: 'missing' }),
     agent('fork-only', 'Requires new conversation', { movable: false }),
     agent('closed', 'Closed conversation', { status: 'closed' }),
     agent('claude-idle', 'Claude individual change', { family: 'claude', provider: 'claude', accountId: 'claude-work' }),
-  ], installed: ['claude', 'pi'], providers: { claude: 'claude', pi: 'pi' }, nextUp: { claude: 'claude-work', pi: 'pi-native:default' },
+  ], installed: ['claude', 'pi'], providers: { claude: 'claude', pi: 'pi' },
+  nextUp: { claude: 'claude-work', pi: CODEX },
   activity: [], warnings: [], hostTimeZone: { name: 'UTC', offsetMinutes: 0 },
 });
 const calls: unknown[] = [], refreshes: unknown[] = [];
@@ -60,18 +64,21 @@ function makeStore(id: string) {
     },
     watch: () => () => {}, start() {}, stop() {}, watchClosely: () => () => {},
     setError(error: string | null) { snapshot = { ...snapshot, error }; listeners.forEach(fn => fn()); },
-    rpc: async (contract: { name: string }, input: { agentId: string; accountId?: string | null; onlyIfIdle?: boolean; providerId?: 'openai' | 'openai-codex'; expectedAccountId?: string }) => {
+    rpc: async (
+      contract: { name: string },
+      input: { agentId: string; accountId?: string | null; onlyIfIdle?: boolean },
+    ) => {
       calls.push({ store: id, rpc: contract.name, input });
-      const providerChange = contract.name === 'paseo-accounts.agents.provider';
-      if ((!providerChange && contract.name !== 'paseo-accounts.agents.account') || !state.agents.some(a => a.agentId === input.agentId)) throw Error('Fixture blocks non-local agent RPCs');
-      const current = snapshot.state.agents.find(row => row.agentId === input.agentId)!;
-      if (providerChange && (current.family !== 'pi' || input.expectedAccountId !== current.accountId)) throw Error('Synthetic fixture: stale provider source');
+      if (contract.name !== 'paseo-accounts.agents.account' ||
+          !state.agents.some(a => a.agentId === input.agentId))
+        throw Error('Fixture blocks non-local agent RPCs');
       if (pauseNext) { pauseNext = false; await new Promise<void>(resolve => { release = resolve; }); }
-      const targetId = providerChange ? input.providerId === 'openai-codex' ? 'pi-native:codex:default' : 'pi-native:default' : input.accountId;
-      const alreadySelected = providerChange && current.accountId === targetId && !current.pinned;
-      const changed = input.agentId !== 'fails' && !alreadySelected;
+      const targetId = input.accountId;
+      const changed = input.agentId !== 'fails';
       if (changed) {
-        snapshot = { ...snapshot, state: { ...snapshot.state, agents: snapshot.state.agents.map(row => row.agentId === input.agentId ? { ...row, accountId: targetId, pinned: !providerChange } : row) } };
+        const agents = snapshot.state.agents.map(row =>
+          row.agentId === input.agentId ? { ...row, accountId: targetId, pinned: true } : row);
+        snapshot = { ...snapshot, state: { ...snapshot.state, agents } };
         listeners.forEach(fn => fn());
       }
       return { reopened: changed ? [input.agentId] : [], deferred: [], continuedIn: null,

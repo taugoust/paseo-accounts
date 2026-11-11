@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Pi accounts are Codex only: the Pi section lists the Codex default login and Codex profiles, with their usage. Pi's `openai` provider is no longer managed here; Pi agents on `openai/` models get no account and no warning.
+- Removed the OpenAI Pi accounts, OpenAI usage read through the Codex login, and switching Pi agents between OpenAI and Codex (**Change provider…** and **Change provider across hosts…**).
+
 ## 1.0.4 - 2026-10-21
 
 - Every Claude and ChatGPT account can be signed out (**Sign out**) without removing it; **Sign in** brings it back. Added accounts can still be removed.

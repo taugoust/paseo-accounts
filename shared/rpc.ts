@@ -17,8 +17,6 @@ export const startLogin = defineRpc({
   name: "paseo-accounts.login.start",
   input: z.object({
     family: FamilySchema,
-    /** Native Pi provider selection; omitted remains legacy OpenAI. */
-    providerId: z.enum(["openai", "openai-codex"]).optional(),
     /** Sign an existing account back in instead of adding a new one. */
     accountId: z.string().optional(),
     method: LoginMethodSchema.default("browser"),
@@ -163,18 +161,6 @@ export const forkAgent = defineRpc({
   name: "paseo-accounts.agents.fork",
   input: z.object({ agentId: z.string(), to: z.string().optional() }),
   output: z.object({ agentId: z.string(), title: z.string() }),
-});
-
-/** Changes only this live, idle Pi session to the destination provider's local default. */
-export const setAgentProvider = defineRpc({
-  name: "paseo-accounts.agents.provider",
-  input: z.object({
-    agentId: z.string(),
-    providerId: z.enum(["openai", "openai-codex"]),
-    /** Canonical source choice observed by the client; stale choices are skipped. */
-    expectedAccountId: z.string(),
-  }),
-  output: ReopenSummarySchema,
 });
 
 export const setAgentAccount = defineRpc({

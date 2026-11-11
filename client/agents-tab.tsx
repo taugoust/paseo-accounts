@@ -11,7 +11,7 @@ import {
 	type StateView,
 } from "../shared/model";
 import { setAgentAccount } from "../shared/rpc";
-import { bulkChangeAccounts, bulkChangeProvider, bulkGroup, compatibleAccounts, eligible } from "./bulk-accounts";
+import { bulkChangeAccounts, bulkGroup, compatibleAccounts, eligible } from "./bulk-accounts";
 import { SectionLabel } from "./account-row";
 import { describeReopen } from "./reopen-text";
 import { describe, type AccountsStore } from "./store";
@@ -43,7 +43,6 @@ export function AgentsTab({
 	const [selecting, setSelecting] = useState(false);
 	const [selected, setSelected] = useState<AgentRoute[]>([]);
 	const [bulkOpen, setBulkOpen] = useState(false);
-	const [providerOpen, setProviderOpen] = useState(false);
 	const [bulkBusy, setBulkBusy] = useState(false);
 	const [report, setReport] = useState<string | null>(null);
 	const source = useRef({ store, sourceId, available });
@@ -51,11 +50,11 @@ export function AgentsTab({
 		source.current = { store, sourceId, available };
 	}
 	useEffect(() => {
-		setSelecting(false); setSelected([]); setMoving(null); setBulkOpen(false); setProviderOpen(false); setReport(null); setBulkBusy(false);
+		setSelecting(false); setSelected([]); setMoving(null);
+		setBulkOpen(false); setReport(null); setBulkBusy(false);
 	}, [store, sourceId, available]);
 	const groups = new Set(selected.map((agent) => bulkGroup(agent, state)));
 	const compatible = selected.length > 0 && groups.size === 1 && !groups.has(null);
-	const canChangeProvider = selected.length > 0 && selected.every((agent) => agent.family === "pi" && bulkGroup(agent, state) !== null);
 	const anchor = selected[0];
 	const changeSelected = async (accountId: string | null) => {
 		if (accountId === null) return;
@@ -66,16 +65,6 @@ export function AgentsTab({
 			if (source.current !== lifetime) return;
 			setReport(`${result.changed} changed · ${result.skipped} skipped · ${result.failed} failed`);
 			setBulkOpen(false); setSelected([]); setSelecting(false);
-		} finally { if (source.current === lifetime) setBulkBusy(false); }
-	};
-	const changeSelectedProvider = async (providerId: "openai" | "openai-codex") => {
-		const lifetime = source.current;
-		setBulkBusy(true);
-		try {
-			const result = await bulkChangeProvider(store, selected, providerId, () => source.current === lifetime && lifetime.available);
-			if (source.current !== lifetime) return;
-			setReport(`${result.changed} changed · ${result.skipped} skipped · ${result.failed} failed`);
-			setProviderOpen(false); setSelected([]); setSelecting(false);
 		} finally { if (source.current === lifetime) setBulkBusy(false); }
 	};
 	const live = state.agents.filter((agent) => agent.status !== "closed");
@@ -94,11 +83,12 @@ export function AgentsTab({
 					{selecting ? <>
 						<Button theme={theme} size="small" label="Select all eligible" disabled={bulkBusy || !available} onPress={() => setSelected(live.filter((agent) => families.includes(agent.family) && eligible(agent, state)))} />
 						<Button theme={theme} size="small" label={`Change account…${selected.length ? ` (${selected.length})` : ""}`} disabled={bulkBusy || !available || !compatible} onPress={() => setBulkOpen(true)} />
-						<Button theme={theme} size="small" label={`Change provider…${selected.length ? ` (${selected.length})` : ""}`} disabled={bulkBusy || !available || !canChangeProvider} onPress={() => setProviderOpen(true)} />
 					</> : null}
 				</View>
 				{selecting ? <Text style={text.small}>Bulk changes support idle Pi agents. Other agents can still be changed individually.</Text> : null}
-				{selecting && selected.length > 0 && !compatible ? <Text style={text.small}>Change account needs one provider. Change provider supports mixed Pi providers.</Text> : null}
+				{selecting && selected.length > 0 && !compatible ? (
+					<Text style={text.small}>Change account needs agents of one provider.</Text>
+				) : null}
 				{report ? <Text style={text.small}>{report}</Text> : null}
 			</View>
 			{families.map((family) => {
@@ -145,16 +135,6 @@ export function AgentsTab({
 					</View>
 				);
 			})}
-			{providerOpen ? <Modal title={`Change provider for ${selected.length} agent${selected.length === 1 ? "" : "s"}`} open
-				onOpenChange={(open) => { if (!open && !bulkBusy) setProviderOpen(false); }}>
-				<Modal.Content>
-					<View style={{ gap: 12 }}>
-						<Text style={text.small}>Use the chosen provider’s default account for the selected agents, replacing their provider and account pins. Pi keeps the model ID/role; the destination must support it. Children following these sessions inherit the change.</Text>
-						<Button theme={theme} label="OpenAI" disabled={bulkBusy} onPress={() => void changeSelectedProvider("openai")} />
-						<Button theme={theme} label="Codex" disabled={bulkBusy} onPress={() => void changeSelectedProvider("openai-codex")} />
-					</View>
-				</Modal.Content>
-			</Modal> : null}
 			{bulkOpen && anchor ? <MoveModal theme={theme} agent={anchor} state={state} store={store}
 				title={`Change account for ${selected.length} agent${selected.length === 1 ? "" : "s"}`} accountsOverride={compatibleAccounts(anchor, state)}
 				onChoose={changeSelected} bulk onClose={() => { if (!bulkBusy) setBulkOpen(false); }} /> : null}

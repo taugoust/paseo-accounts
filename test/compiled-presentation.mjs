@@ -102,19 +102,13 @@ for (const colors of palettes) {
   });
 }
 
-test('compiled Pi account setup selects the native provider and never offers Codex API-key login', async () => {
+test('compiled Pi account setup adds Codex profiles only, no provider choice', async () => {
   const calls = [];
   const props = { theme:{colors:palettes[0]}, layout:{compact:true,platform:'ios'}, host:{id:'fixture',label:'Local host'}, multiHost:false, family:'pi', onClose() {}, store:{...store,rpc:async (rpc,input)=>{calls.push({rpc,input});return {accountId:'same-name'};}} };
   let tree = render(addAccount.AddAccountModal, props);
-  let all = nodes(tree);
-  const selector = all.find(n=>n.type==='SettingsSelect');
-  assert.equal(selector.props.value,'openai');
-  assert.deepEqual(selector.props.options.map(option=>option.value),['openai','openai-codex']);
-  assert.match(text(tree),/API key/);
-  selector.props.onValueChange('openai-codex');
-  tree = render(addAccount.AddAccountModal, props, false);
-  all = nodes(tree);
-  assert.equal(all.find(n=>n.type==='SettingsSelect').props.value,'openai-codex');
+  const all = nodes(tree);
+  assert.equal(all.some(n=>n.type==='SettingsSelect'),false);
+  assert.match(text(tree),/Codex profile/);
   assert.doesNotMatch(text(tree),/API key/);
   all.find(n=>n.type==='TextInput').props.onChangeText('same-name');
   tree = render(addAccount.AddAccountModal, props, false);
@@ -123,7 +117,7 @@ test('compiled Pi account setup selects the native provider and never offers Cod
   signIn.props.onPress();
   await Promise.resolve();
   assert.equal(calls.length,1);
-  assert.deepEqual(calls[0].input,{operation:'add',accountName:'same-name',method:'oauth',providerId:'openai-codex'});
+  assert.deepEqual(calls[0].input,{operation:'add',accountName:'same-name',method:'oauth'});
 });
 
 test('compiled activity, agent and project views retain content and callbacks with native surfaces', () => {

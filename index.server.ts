@@ -14,21 +14,15 @@ import { PiAdapter } from "./server/pi";
 import {
   isNativePiAccount,
   NativePiAccounts,
+  piAccountName,
   refusePiManagement,
 } from "./server/pi-native-view";
-import { piAccountManageRpc, piApplyProviderRpc } from "./shared/pi-native";
-function nativePiIdentity(id: string) {
-  if (id === "pi-native:default")
-    return { providerId: "openai" as const, accountId: null };
-  if (id === "pi-native:codex:default")
-    return { providerId: "openai-codex" as const, accountId: null };
-  const codex = id.startsWith("pi-native:codex:profile:");
-  const prefix = codex ? "pi-native:codex:profile:" : "pi-native:profile:";
-  if (!id.startsWith(prefix)) throw new Error("Invalid native Pi account ID.");
-  return {
-    providerId: codex ? ("openai-codex" as const) : ("openai" as const),
-    accountId: decodeURIComponent(id.slice(prefix.length)),
-  };
+import { piAccountManageRpc } from "./shared/pi-native";
+/** The Pi profile an account ID names: `null` for the Codex default login. */
+function nativePiAccount(id: string): string | null {
+  const parsed = piAccountName(id);
+  if (!parsed) throw new Error("Invalid native Pi account ID.");
+  return parsed.name;
 }
 import { Service, describe, isClaudeBridge } from "./server/service";
 import { preferences } from "./shared/preferences";
@@ -41,7 +35,6 @@ import {
   signOutAccount,
   renameAccount,
   setAgentAccount,
-  setAgentProvider,
   setDefaultAccount,
   setAccountEnabled,
   setAccountFolders,
@@ -147,7 +140,6 @@ export default function contribute(server: PluginServerContext) {
       };
     }
   });
-  server.handle(piApplyProviderRpc, (input, context) => nativePi.applyProvider(input, context));
   server.handle(piAccountManageRpc, async (input, context) => {
     const result = await nativePi.manage(input, context);
     return {
@@ -159,26 +151,15 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(
     startLogin,
-    async ({ family, method, accountId, providerId }, context) => {
-      if (providerId && family !== "pi") throw new Error("providerId is only valid for native Pi account setup.");
+    async ({ family, method, accountId }, context) => {
       if (family === "pi") {
-        const codex =
-          accountId?.startsWith("pi-native:codex:") ||
-          providerId === "openai-codex";
-        const prefix = accountId?.startsWith("pi-native:codex:profile:")
-          ? "pi-native:codex:profile:"
-          : "pi-native:profile:";
-        const name = accountId?.startsWith(prefix)
-          ? decodeURIComponent(accountId.slice(prefix.length))
-          : undefined;
+        const name = accountId ? piAccountName(accountId)?.name : undefined;
         const result = await nativePi.manage(
           {
             operation: "add",
             ...(name ? { accountName: name } : {}),
             method: "oauth",
-            providerId: codex ? "openai-codex" : "openai",
           },
-
           context,
         );
         return {
@@ -187,7 +168,7 @@ export default function contribute(server: PluginServerContext) {
           method,
           accountId:
             typeof result?.accountId === "string"
-              ? `pi-native:${codex ? "codex:" : ""}profile:${encodeURIComponent(result.accountId)}`
+              ? `pi-native:codex:profile:${encodeURIComponent(result.accountId)}`
               : null,
           step: "done",
           url: null,
@@ -207,12 +188,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(cancelLogin, ({ loginId }) => service.cancelLogin(loginId));
   server.handle(renameAccount, async ({ accountId, label }, context) => {
     if (isNativePiAccount(accountId)) {
-      const identity = nativePiIdentity(accountId);
       await nativePi.manage(
         {
           operation: "rename",
-          ...identity,
-          accountId: identity.accountId ?? undefined,
+          accountId: nativePiAccount(accountId) ?? undefined,
           label,
         },
         context,
@@ -224,12 +203,10 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(removeAccount, async ({ accountId }, context) => {
     if (isNativePiAccount(accountId)) {
-      const identity = nativePiIdentity(accountId);
       await nativePi.manage(
         {
           operation: "remove",
-          ...identity,
-          accountId: identity.accountId ?? undefined,
+          accountId: nativePiAccount(accountId) ?? undefined,
         },
         context,
       );
@@ -250,13 +227,8 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(setDefaultAccount, async ({ accountId }, context) => {
     if (isNativePiAccount(accountId)) {
-      const identity = nativePiIdentity(accountId);
       await nativePi.manage(
-        {
-          operation: "default",
-          providerId: identity.providerId,
-          accountId: identity.accountId,
-        },
+        { operation: "default", accountId: nativePiAccount(accountId) },
         context,
       );
       return { reopened: [], deferred: [], failed: [], continuedIn: null };
@@ -272,9 +244,6 @@ export default function contribute(server: PluginServerContext) {
     refusePiManagement(accountId);
     return service.redeem(paseo, accountId, agentId);
   });
-  server.handle(setAgentProvider, ({ agentId, providerId, expectedAccountId }, context) =>
-    nativePi.changeProvider(agentId, providerId, expectedAccountId, context),
-  );
   server.handle(setAgentAccount, async ({ agentId, accountId, onlyIfIdle }, context) => {
     const agent = (await context.paseo.agents.ref(agentId).refresh())?.agent;
     // Legacy reloads cannot atomically reject a turn starting after this refresh.
