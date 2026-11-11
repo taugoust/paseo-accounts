@@ -131,7 +131,8 @@ export const piAccountManageRpc = defineRpc({
     accountId: z.string().min(1).max(64).nullable().optional(),
     accountName: z.string().trim().max(64).optional(),
     label: z.string().trim().max(40).optional(),
-    method: z.enum(["oauth", "api_key"]).optional(),
+    // Codex accounts sign in with OAuth only.
+    method: z.literal("oauth").optional(),
   }),
   output: z
     .object({ ok: z.literal(true), accountId: z.string().optional() })

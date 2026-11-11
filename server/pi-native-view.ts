@@ -445,7 +445,7 @@ export class NativePiAccounts {
       accountId?: string | null;
       accountName?: string;
       label?: string;
-      method?: "oauth" | "api_key";
+      method?: "oauth";
     },
     context: PluginHandlerContext,
   ) {
