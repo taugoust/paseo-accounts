@@ -194,6 +194,8 @@ function buttonFor(
 	const family = route?.family ?? state.providers[agent.provider];
 	if (!family) return null;
 	const isPi = family === "pi";
+	// Pi agents always get a pill naming the provider, also when they run on Claude's accounts.
+	const piAgent = agent.provider === "pi";
 	const accounts = state.accounts.filter(
 		(account) => account.family === family,
 	);
@@ -237,7 +239,7 @@ function buttonFor(
 			: [];
 	const offerFork = forkTargets.length > 0;
 	if (
-		!isPi &&
+		!piAgent &&
 		accounts.length < 2 &&
 		!(current.status === "limited" && (offerReset || offerFork))
 	)
@@ -348,7 +350,7 @@ function buttonFor(
 	return {
 		title: `Account: ${current.label}${current.email && current.email !== current.label ? ` (${current.email})` : ""}`,
 		icon: current.status === "limited" ? "CircleAlert" : "CircleUserRound",
-		label: `${isPi ? `${nativePillProvider(current.id) ?? familyLabel(family)} · ` : ""}${shortLabel(current)}${pending}`,
+		label: `${piAgent ? `${(isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family)} · ` : ""}${shortLabel(current)}${pending}`,
 		behavior: { kind: "menu", items },
 	};
 }
