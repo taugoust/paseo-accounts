@@ -174,6 +174,8 @@ interface AgentInfo {
 	hasHistory: boolean;
 	title: string | null;
 	cwd: string | null;
+	/** The provider's model id, e.g. "claude-bridge/claude-opus-5-5" for a Pi agent. */
+	model: string | null;
 	/** The agent this one carries on from, when the plugin started it as a continuation. */
 	continuedFrom: string | null;
 }
@@ -2055,9 +2057,30 @@ export class Service {
 
 		const routes: AgentRoute[] = [];
 		const counts = new Map<string, number>();
+		const claudeMain = findAccount(state, MAIN_ACCOUNT_ID.claude);
 		for (const agent of agents) {
 			const family = families[agent.provider];
 			if (!family || agent.archived) continue;
+			if (family === "pi" && isClaudeBridge(agent.model)) {
+				// pi-claude-bridge runs each turn through Claude Code with Pi's environment, so these
+				// agents use the Claude Code CLI login. Shown there for usage only; they can't move.
+				if (!claudeMain) continue;
+				counts.set(claudeMain.id, (counts.get(claudeMain.id) ?? 0) + 1);
+				routes.push({
+					agentId: agent.id,
+					family: "claude",
+					accountId: claudeMain.id,
+					pinned: false,
+					pendingAccountId: null,
+					movable: false,
+					canSwitch: false,
+					provider: agent.provider,
+					title: agent.title,
+					cwd: agent.cwd ?? state.sessions[agent.id]?.cwd ?? null,
+					status: agent.status,
+				});
+				continue;
+			}
 			const accountId = this.targetFor(state, agent.id, family);
 			if (!accountId) continue;
 			counts.set(accountId, (counts.get(accountId) ?? 0) + 1);
@@ -2878,6 +2901,11 @@ type AgentSnapshot = Awaited<
 	ReturnType<PaseoApi["agents"]["list"]>
 >["entries"][number]["agent"];
 
+/** Pi agents on pi-claude-bridge models, which run on the Claude Code CLI login. */
+export function isClaudeBridge(model: string | null | undefined): boolean {
+	return model?.startsWith("claude-bridge/") ?? false;
+}
+
 function toAgentInfo(agent: AgentSnapshot): AgentInfo {
 	return {
 		id: agent.id,
@@ -2887,6 +2915,7 @@ function toAgentInfo(agent: AgentSnapshot): AgentInfo {
 		hasHistory: Boolean(agent.lastUserMessageAt),
 		title: agent.title ?? null,
 		cwd: agent.cwd ?? null,
+		model: typeof agent.model === "string" ? agent.model : null,
 		continuedFrom: agent.labels?.[CONTINUED_FROM_LABEL] ?? null,
 	};
 }

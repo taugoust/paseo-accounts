@@ -309,7 +309,8 @@ export class NativePiAccounts {
                 ? "openai"
                 : null;
             if (!modelProvider) {
-              unavailable++;
+              // Claude-bridge agents use the Claude Code login and are listed under Claude.
+              if (!agent.model?.startsWith("claude-bridge/")) unavailable++;
               continue;
             }
             let status = await this.controls.status(
