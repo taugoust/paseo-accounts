@@ -252,6 +252,26 @@ export class Service {
 		this.paseo ??= paseo;
 	}
 
+	/** The family whose accounts an agent runs on. Pi agents on claude-bridge run on Claude Code's. */
+	private familyOf(
+		families: Record<string, Family>,
+		agent: { provider: string; model: string | null },
+	): Family | undefined {
+		const family = families[agent.provider];
+		return family === "pi" && isClaudeBridge(agent.model) ? "claude" : family;
+	}
+
+	/** Like familyOf, for hooks that only know the provider: Pi agents are looked up. */
+	private async hookFamily(
+		paseo: PaseoApi,
+		agent: { id: string; provider: string },
+	): Promise<Family | undefined> {
+		const families = await this.families.resolve(paseo);
+		if (families[agent.provider] !== "pi") return families[agent.provider];
+		const info = await agentInfo(paseo, agent.id);
+		return info ? this.familyOf(families, info) : undefined;
+	}
+
 	async start(): Promise<void> {
 		// The last readings show right away; fresh ones replace them as they arrive.
 		for (const [accountId, reading] of await loadReadings())
@@ -491,10 +511,14 @@ export class Service {
 		context: PluginHookContext,
 	): Promise<PluginSessionOpenRequest | undefined> {
 		this.attach(context.paseo);
-		const family = (await this.families.resolve(context.paseo))[
+		const provided = (await this.families.resolve(context.paseo))[
 			request.provider
 		];
-		if (!family || family === "pi") return undefined;
+		// Every Pi session gets the routed Claude account's environment. Only pi-claude-bridge reads
+		// it, so turns on a claude-bridge model use that account even if the agent switches to such a
+		// model after the session opened.
+		const family = provided === "pi" ? "claude" : provided;
+		if (!family) return undefined;
 		const adapter = this.adapters[family];
 		const now = Date.now();
 		const state = await this.store.read();
@@ -570,7 +594,7 @@ export class Service {
 		context: PluginHookContext,
 	): Promise<void> {
 		this.attach(context.paseo);
-		const family = (await this.families.resolve(context.paseo))[agent.provider];
+		const family = await this.hookFamily(context.paseo, agent);
 		if (!family || family === "pi") return;
 		const accountId = this.runningOn(await this.store.read(), agent.id, family);
 		if (accountId) this.activeAt.set(accountId, Date.now());
@@ -581,15 +605,16 @@ export class Service {
 		context: PluginHookContext,
 	): Promise<void> {
 		this.attach(context.paseo);
-		const family = (await this.families.resolve(context.paseo))[
-			event.agent.provider
-		];
+		const family = await this.hookFamily(context.paseo, event.agent);
 		if (!family || family === "pi") return;
 		const adapter = this.adapters[family];
 		const agentId = event.agent.id;
 		const accountId = this.runningOn(await this.store.read(), agentId, family);
 		if (accountId) this.activeAt.set(accountId, Date.now());
-		if (event.outcome.kind !== "canceled") {
+		// Pi agents on claude-bridge switch when asked, but don't fail over on limits yet.
+		const bridged =
+			(await this.families.resolve(context.paseo))[event.agent.provider] === "pi";
+		if (!bridged && event.outcome.kind !== "canceled") {
 			const hit = adapter.detectLimit(event);
 			if (hit)
 				return this.handleUnavailable(
@@ -1396,7 +1421,7 @@ export class Service {
 				(agent) =>
 					agent.id !== except &&
 					!agent.archived &&
-					families[agent.provider] === family &&
+					this.familyOf(families, agent) === family &&
 					this.runningOn(state, agent.id, family) === accountId,
 			)
 			.map((agent) => agent.id);
@@ -1839,7 +1864,7 @@ export class Service {
 		}
 		// Reloading an archived agent would unarchive it; a closed one routes itself when it next opens.
 		if (info.archived || info.status === "closed") return "closed";
-		const family = (await this.families.resolve(paseo))[info.provider];
+		const family = this.familyOf(await this.families.resolve(paseo), info);
 		if (family && !this.adapters[family].portable && info.hasHistory) {
 			// The thread gained history while waiting, so it can no longer change accounts: keep it put.
 			const state = await this.store.read();
@@ -1891,8 +1916,8 @@ export class Service {
 		const families = await this.families.resolve(paseo);
 		for (const agent of await this.liveAgents(paseo, agentIds)) {
 			const agentId = agent.id;
-			const family = families[agent.provider];
-			if (!family || this.switching.has(agentId)) continue;
+			const family = this.familyOf(families, agent);
+			if (!family || family === "pi" || this.switching.has(agentId)) continue;
 			const current = this.runningOn(state, agentId, family);
 			const target = this.targetFor(state, agentId, family);
 			if (!current || !target || target === current) continue;
@@ -2057,30 +2082,10 @@ export class Service {
 
 		const routes: AgentRoute[] = [];
 		const counts = new Map<string, number>();
-		const claudeMain = findAccount(state, MAIN_ACCOUNT_ID.claude);
 		for (const agent of agents) {
-			const family = families[agent.provider];
+			// Pi agents on claude-bridge are Claude agents here; other Pi agents come from the Pi view.
+			const family = this.familyOf(families, agent);
 			if (!family || agent.archived) continue;
-			if (family === "pi" && isClaudeBridge(agent.model)) {
-				// pi-claude-bridge runs each turn through Claude Code with Pi's environment, so these
-				// agents use the Claude Code CLI login. Shown there for usage only; they can't move.
-				if (!claudeMain) continue;
-				counts.set(claudeMain.id, (counts.get(claudeMain.id) ?? 0) + 1);
-				routes.push({
-					agentId: agent.id,
-					family: "claude",
-					accountId: claudeMain.id,
-					pinned: false,
-					pendingAccountId: null,
-					movable: false,
-					canSwitch: false,
-					provider: agent.provider,
-					title: agent.title,
-					cwd: agent.cwd ?? state.sessions[agent.id]?.cwd ?? null,
-					status: agent.status,
-				});
-				continue;
-			}
 			const accountId = this.targetFor(state, agent.id, family);
 			if (!accountId) continue;
 			counts.set(accountId, (counts.get(accountId) ?? 0) + 1);
@@ -2334,7 +2339,7 @@ export class Service {
 			const latest = await this.store.read();
 			stayed = (await listAgents(paseo, false)).agents.filter(
 				(agent) =>
-					families[agent.provider] === account.family &&
+					this.familyOf(families, agent) === account.family &&
 					agent.hasHistory &&
 					this.targetFor(latest, agent.id, account.family) === accountId,
 			).length;
@@ -2391,7 +2396,7 @@ export class Service {
 		const families = await this.families.resolve(paseo);
 		const open = (await listAgents(paseo, false)).agents.filter(
 			(agent) =>
-				families[agent.provider] === family &&
+				this.familyOf(families, agent) === family &&
 				!agent.archived &&
 				isLive(agent.status),
 		);
@@ -2458,7 +2463,7 @@ export class Service {
 		this.attach(paseo);
 		const info = await agentInfo(paseo, agentId);
 		if (!info) throw new Error("That agent is no longer available.");
-		const family = (await this.families.resolve(paseo))[info.provider];
+		const family = this.familyOf(await this.families.resolve(paseo), info);
 		if (!family)
 			throw new Error(
 				`${info.provider} agents don't use Claude or ChatGPT subscription accounts.`,
@@ -2553,7 +2558,7 @@ export class Service {
 			const families = await this.families.resolve(paseo);
 			const stranded = (await listAgents(paseo, false)).agents.filter(
 				(agent) =>
-					families[agent.provider] === account.family &&
+					this.familyOf(families, agent) === account.family &&
 					agent.hasHistory &&
 					(state.bindings[agent.id]?.accountId ??
 						state.sessions[agent.id]?.accountId) === accountId,

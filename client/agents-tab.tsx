@@ -193,8 +193,6 @@ function AgentRow({
 	const text = useText(theme);
 	const colors = theme.colors;
 	const running = agent.status === "running";
-	// Pi agents shown under another provider's login (claude-bridge) can't change accounts here.
-	const fixed = agent.family !== "pi" && agent.canSwitch === false;
 	return (
 		<View
 			style={{
@@ -259,8 +257,8 @@ function AgentRow({
 			</Pressable>
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={`Account: ${account?.label ?? "none"}${fixed ? "" : ". Change"}`}
-				disabled={selecting || fixed}
+				accessibilityLabel={`Account: ${account?.label ?? "none"}. Change`}
+				disabled={selecting}
 				onPress={onMove}
 				style={({ pressed }) => ({
 					flexDirection: "row",
@@ -293,9 +291,7 @@ function AgentRow({
 				{agent.pinned ? (
 					<Icon name="Pin" size={11} color={colors.foregroundMuted} />
 				) : null}
-				{fixed ? null : (
-					<Icon name="ChevronsUpDown" size={12} color={colors.foregroundMuted} />
-				)}
+				<Icon name="ChevronsUpDown" size={12} color={colors.foregroundMuted} />
 			</Pressable>
 		</View>
 	);

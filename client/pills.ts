@@ -189,9 +189,10 @@ function buttonFor(
 	agent: TrackedAgent,
 ): PluginButton | null {
 	if (!state.showComposerPill) return null;
-	const family = state.providers[agent.provider];
-	if (!family) return null;
 	const route = state.agents.find((entry) => entry.agentId === agent.id);
+	// A route knows the agent's account family (a Pi agent on claude-bridge runs on Claude's).
+	const family = route?.family ?? state.providers[agent.provider];
+	if (!family) return null;
 	const isPi = family === "pi";
 	const accounts = state.accounts.filter(
 		(account) => account.family === family,
@@ -207,7 +208,9 @@ function buttonFor(
 		resets !== null && (current.status === "limited" || resets.usableNow);
 	// With every account of this provider out, the work can carry on with another provider: the
 	// plugin's families with a ready account, then any other provider Paseo has available.
+	// Pi agents can't be forked to another provider, even when they run on Claude's accounts.
 	const forkTargets: Array<{ id: string; label: string }> =
+		agent.provider !== "pi" &&
 		current.status === "limited" &&
 		accounts.every(
 			(account) =>
