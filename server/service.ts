@@ -2196,14 +2196,13 @@ export class Service {
 
 	private async warnings(): Promise<string[]> {
 		const warnings: string[] = [];
-		// Kimi Code and OpenCode are optional extras; only Claude Code and Codex are worth a nudge.
-		for (const family of ["claude", "codex"] as const) {
-			const availability = this.availability.get(family);
-			if (availability && !availability.ok) {
-				warnings.push(
-					`${PROVIDER_NAME[family]} isn't installed where the daemon can run it${availability.detail ? ` (${availability.detail})` : ""}. Install it to add ${FAMILY_LABEL[family]} accounts.`,
-				);
-			}
+		// Only Claude Code is worth a nudge. Kimi Code and OpenCode are optional extras, and ChatGPT
+		// and Codex accounts come through Pi here, so a missing Codex CLI doesn't matter.
+		const claude = this.availability.get("claude");
+		if (claude && !claude.ok) {
+			warnings.push(
+				`${PROVIDER_NAME.claude} isn't installed where the daemon can run it${claude.detail ? ` (${claude.detail})` : ""}. Install it to add ${FAMILY_LABEL.claude} accounts.`,
+			);
 		}
 		if (
 			process.env.CLAUDE_CODE_OAUTH_TOKEN ||

@@ -23,18 +23,23 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-function adapter(family: FamilyAdapter["family"]): FamilyAdapter {
+function adapter(family: FamilyAdapter["family"], missing = false): FamilyAdapter {
   return {
     family,
     portable: true,
     usageSpacingMs: 0,
-    available: async () => ({ ok: true, detail: null }),
+    available: async () =>
+      missing ? { ok: false, detail: `spawn ${family} ENOENT` } : { ok: true, detail: null },
     identity: async () => null,
     usage: async () => ({ fetchedAt: new Date().toISOString(), windows: [], error: null, cached: false, resets: null }),
   } as unknown as FamilyAdapter;
 }
 
-async function view(models: Array<[string, string | null]>, withClaudeMain = true) {
+async function view(
+  models: Array<[string, string | null]>,
+  withClaudeMain = true,
+  missing?: readonly string[],
+) {
   const store = new StateStore(join(root, "state.json"));
   if (withClaudeMain)
     await store.update((draft) => {
@@ -65,12 +70,20 @@ async function view(models: Array<[string, string | null]>, withClaudeMain = tru
   };
   const families = ["claude", "codex", "kimi", "opencode", "pi", "copilot", "omp"] as const;
   const service = new Service(
-    Object.fromEntries(families.map((family) => [family, adapter(family)])) as never,
+    Object.fromEntries(
+      families.map((family) => [family, adapter(family, missing?.includes(family))]),
+    ) as never,
     store,
     { resolve: async () => ({ pi: "pi" as const }) } as unknown as FamilyResolver,
     { locate: async () => null } as unknown as Reopener,
   );
-  return service.view(paseo as never);
+  // Starting checks which CLIs are installed; only needed when a test makes some missing.
+  if (missing) await service.start();
+  try {
+    return await service.view(paseo as never);
+  } finally {
+    if (missing) await service.stop();
+  }
 }
 
 it("lists Pi agents on claude-bridge under the Claude Code login, display only", async () => {
@@ -101,4 +114,13 @@ it("recognises only claude-bridge models", () => {
   expect(isClaudeBridge("claude-bridge/claude-sonnet-5-5")).toBe(true);
   expect(isClaudeBridge("anthropic/claude-opus-5-5")).toBe(false);
   expect(isClaudeBridge(null)).toBe(false);
+});
+
+it("doesn't ask for the Codex CLI, which Pi replaces here, but still asks for Claude Code", async () => {
+  const codexOnly = await view([], false, ["codex"]);
+  expect(codexOnly.warnings.some((warning) => warning.includes("Codex"))).toBe(false);
+  const both = await view([], false, ["claude", "codex"]);
+  expect(both.warnings.filter((warning) => warning.includes("isn't installed"))).toEqual([
+    "Claude Code isn't installed where the daemon can run it (spawn claude ENOENT). Install it to add Claude accounts.",
+  ]);
 });
