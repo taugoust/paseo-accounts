@@ -189,10 +189,13 @@ function buttonFor(
 	agent: TrackedAgent,
 ): PluginButton | null {
 	if (!state.showComposerPill) return null;
-	const family = state.providers[agent.provider];
-	if (!family) return null;
 	const route = state.agents.find((entry) => entry.agentId === agent.id);
+	// A route knows the agent's account family (a Pi agent on claude-bridge runs on Claude's).
+	const family = route?.family ?? state.providers[agent.provider];
+	if (!family) return null;
 	const isPi = family === "pi";
+	// Pi agents always get a pill naming the provider, also when they run on Claude's accounts.
+	const piAgent = agent.provider === "pi";
 	const accounts = state.accounts.filter(
 		(account) => account.family === family,
 	);
@@ -207,7 +210,9 @@ function buttonFor(
 		resets !== null && (current.status === "limited" || resets.usableNow);
 	// With every account of this provider out, the work can carry on with another provider: the
 	// plugin's families with a ready account, then any other provider Paseo has available.
+	// Pi agents can't be forked to another provider, even when they run on Claude's accounts.
 	const forkTargets: Array<{ id: string; label: string }> =
+		agent.provider !== "pi" &&
 		current.status === "limited" &&
 		accounts.every(
 			(account) =>
@@ -234,7 +239,7 @@ function buttonFor(
 			: [];
 	const offerFork = forkTargets.length > 0;
 	if (
-		!isPi &&
+		!piAgent &&
 		accounts.length < 2 &&
 		!(current.status === "limited" && (offerReset || offerFork))
 	)
@@ -345,7 +350,7 @@ function buttonFor(
 	return {
 		title: `Account: ${current.label}${current.email && current.email !== current.label ? ` (${current.email})` : ""}`,
 		icon: current.status === "limited" ? "CircleAlert" : "CircleUserRound",
-		label: `${isPi ? `${nativePillProvider(current.id) ?? familyLabel(family)} · ` : ""}${shortLabel(current)}${pending}`,
+		label: `${piAgent ? `${(isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family)} · ` : ""}${shortLabel(current)}${pending}`,
 		behavior: { kind: "menu", items },
 	};
 }

@@ -30,7 +30,7 @@ function nativePiIdentity(id: string) {
     accountId: decodeURIComponent(id.slice(prefix.length)),
   };
 }
-import { Service, describe } from "./server/service";
+import { Service, describe, isClaudeBridge } from "./server/service";
 import { preferences } from "./shared/preferences";
 import {
   cancelLogin,
@@ -85,9 +85,9 @@ export default function contribute(server: PluginServerContext) {
     );
 
   server.before("agent.session_open", async ({ request }, context) => {
-    // Pi owns its credentials and persisted session selection. Never overwrite
-    // its environment or silently fall back to a different account.
-    if (request.provider === "pi") return undefined;
+    // Pi owns its credentials and persisted session selection; those are never touched. Pi
+    // sessions only get the routed Claude account's CLAUDE_CONFIG_DIR, which nothing in Pi reads
+    // except pi-claude-bridge's Claude Code subprocess.
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
@@ -106,17 +106,16 @@ export default function contribute(server: PluginServerContext) {
       clearTimeout(timer);
     }
   });
+  // Pi agents reach these too: the service only acts on those running claude-bridge models.
   server.on("agent.turn_started", (event, context) => {
-    if (event.agent.provider !== "pi")
-      void service.onTurnStarted(event.agent, context).catch(() => undefined);
+    void service.onTurnStarted(event.agent, context).catch(() => undefined);
   });
   server.on("agent.turn_ended", (event, context) => {
-    if (event.agent.provider !== "pi")
-      void service
-        .onTurnEnded(event, context)
-        .catch((error: unknown) =>
-          console.error("[paseo-accounts] failover failed", describe(error)),
-        );
+    void service
+      .onTurnEnded(event, context)
+      .catch((error: unknown) =>
+        console.error("[paseo-accounts] failover failed", describe(error)),
+      );
   });
   server.on("agent.archived", (event) => {
     void service.onAgentArchived(event.agent.id).catch(() => undefined);
@@ -284,7 +283,8 @@ export default function contribute(server: PluginServerContext) {
         !["idle", "error"].includes(agent.status) || agent.archivedAt))
       return { reopened: [], deferred: [], failed: [], continuedIn: null };
     if (!agent) throw new Error("Conversation is no longer available.");
-    if (agent.provider === "pi")
+    // Pi agents on claude-bridge run on Claude Code's accounts, which this service routes.
+    if (agent.provider === "pi" && !isClaudeBridge(typeof agent.model === "string" ? agent.model : null))
       return nativePi.switch(agentId, accountId, context, onlyIfIdle);
     if (accountId) refusePiManagement(accountId);
     return service.setAgentAccount(context.paseo, agentId, accountId);
