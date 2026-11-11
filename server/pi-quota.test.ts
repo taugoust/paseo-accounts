@@ -31,18 +31,12 @@ it("keeps Accounts window validation, IDs, duration labels, and omissions", asyn
       }),
   );
 
-  const result = await fetchPiQuota(
-    {
-      kind: "oauth",
-      access: "opaque-token",
-      expires: Date.now() + 60_000,
-      accountId: "account",
-    },
-    undefined,
-    false,
-    false,
-    "openai-codex",
-  );
+  const result = await fetchPiQuota({
+    kind: "oauth",
+    access: "opaque-token",
+    expires: Date.now() + 60_000,
+    accountId: "account",
+  });
 
   expect(result.usage?.windows).toEqual([
     {
@@ -59,4 +53,28 @@ it("keeps Accounts window validation, IDs, duration labels, and omissions", asyn
     },
   ]);
   expect(result.usage).not.toHaveProperty("balances");
+});
+
+it("reads usage with the credential's own ChatGPT account", async () => {
+  const seen: Array<{ url: string; account: string | undefined }> = [];
+  vi.stubGlobal(
+    "fetch",
+    async (url: string, init: { headers: Record<string, string> }) => {
+      seen.push({ url, account: init.headers["ChatGPT-Account-Id"] });
+      return Response.json({
+        plan_type: "Pro",
+        rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 3600 } },
+      });
+    },
+  );
+  const result = await fetchPiQuota({
+    kind: "oauth",
+    access: "opaque-token",
+    expires: Date.now() + 60_000,
+    accountId: "work",
+  });
+  expect(seen).toEqual([
+    { url: "https://chatgpt.com/backend-api/wham/usage", account: "work" },
+  ]);
+  expect(result.plan).toBe("Pro");
 });

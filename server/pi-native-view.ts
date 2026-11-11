@@ -5,23 +5,38 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { AccountView, AgentRoute, StateView } from "../shared/model";
-import type { ReopenSummary } from "../shared/rpc";
+import { PI_PROVIDER } from "../shared/pi-native";
 import { createAccountControlsHandlers } from "./pi-native";
-import { applyPiProvider } from "./pi-provider";
 import { fetchPiQuota, quotaCredential, readQuotaAuthData } from "./pi-quota";
 import type { PiQuotaCredential, QuotaResult } from "./pi-quota";
 
 const PREFIX = "pi-native:";
+const CODEX_DEFAULT = `${PREFIX}codex:default`;
+const CODEX_PROFILE = `${PREFIX}codex:profile:`;
 const QUOTA_CACHE_MS = 60_000;
-type NativeProvider = "openai" | "openai-codex";
-const accountId = (name: string | null, provider: NativeProvider = "openai") =>
-  provider === "openai"
-    ? name === null
-      ? `${PREFIX}default`
-      : `${PREFIX}profile:${encodeURIComponent(name)}`
-    : name === null
-      ? `${PREFIX}codex:default`
-      : `${PREFIX}codex:profile:${encodeURIComponent(name)}`;
+/** Pi accounts are the `openai-codex` provider's: its default login and named profiles. */
+const accountId = (name: string | null) =>
+  name === null ? CODEX_DEFAULT : `${CODEX_PROFILE}${encodeURIComponent(name)}`;
+/** The Pi profile name an account ID stands for: `null` for the default login. */
+export function piAccountName(id: string): { name: string | null } | null {
+  if (id === CODEX_DEFAULT) return { name: null };
+  if (!id.startsWith(CODEX_PROFILE)) return null;
+  try {
+    const name = decodeURIComponent(id.slice(CODEX_PROFILE.length));
+    return name ? { name } : null;
+  } catch {
+    return null;
+  }
+}
+/** Pi agents whose model runs on the Codex provider; only these use Pi accounts. */
+export const isCodexModel = (model: unknown) =>
+  typeof model === "string" && model.startsWith(`${PI_PROVIDER}/`);
+/**
+ * Pi agents on these models are left alone: `openai/` is a plain built-in Pi provider, and
+ * claude-bridge agents use the Claude Code login, listed under Claude.
+ */
+const isUnmanagedModel = (model: string | null) =>
+  !!model && (model.startsWith("openai/") || model.startsWith("claude-bridge/"));
 export const isNativePiAccount = (id: string) => id.startsWith(PREFIX);
 export function refusePiManagement(id: string) {
   if (isNativePiAccount(id))
@@ -30,7 +45,6 @@ export function refusePiManagement(id: string) {
     );
 }
 type StoredProfile = {
-  provider: NativeProvider;
   id: string;
   label: string;
   authKind: "oauth" | "api-key";
@@ -39,21 +53,12 @@ type StoredProfile = {
 };
 type StoredProfiles = {
   profiles: StoredProfile[];
-  active: string | null;
   codexActive: string | null;
-  defaultCredential?: PiQuotaCredential;
   codexDefaultCredential?: PiQuotaCredential;
   codexDefaultEmail?: string | null;
-  companionCredential?: PiQuotaCredential;
-  companionUsageEnabled?: boolean;
 };
 function quotaPlanLabel(result: QuotaResult): string | null {
-  if (!result.plan) return null;
-  if (result.source === "codex") return `Codex · ${result.plan}`;
-  if (result.source !== "codex-companion") return result.plan;
-  return result.identityVerified === false
-    ? `Codex companion (identity unverified) · ${result.plan}`
-    : `Codex companion · ${result.plan}`;
+  return result.plan ? `Codex · ${result.plan}` : null;
 }
 function oauthEmail(value: unknown): string | null {
   const credential = record(value);
@@ -82,11 +87,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 async function readCanonicalProfiles(): Promise<StoredProfiles> {
   const directory =
     process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-  const empty = (): StoredProfiles => ({
-    profiles: [],
-    active: null,
-    codexActive: null,
-  });
+  const empty = (): StoredProfiles => ({ profiles: [], codexActive: null });
   try {
     const dir = await lstat(directory);
     if (
@@ -125,21 +126,9 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
           codexDefaultEmail: oauthEmail(quotaAuth.codexDefaultCredential),
         };
       const parsed = JSON.parse(await handle.readFile("utf8"));
-      const entries = parsed?.providers?.openai?.accounts;
-      const codexEntries = parsed?.providers?.["openai-codex"]?.accounts;
-      const active =
-        typeof parsed?.providers?.openai?.active === "string"
-          ? parsed.providers.openai.active
-          : null;
-      const codexActive =
-        typeof parsed?.providers?.["openai-codex"]?.active === "string"
-          ? parsed.providers["openai-codex"].active
-          : null;
-      const list = (
-        provider: NativeProvider,
-        data: unknown,
-        selected: string | null,
-      ): StoredProfile[] => {
+      const codex = record(record(parsed?.providers)?.[PI_PROVIDER]);
+      const codexActive = typeof codex?.active === "string" ? codex.active : null;
+      const list = (data: unknown, selected: string | null): StoredProfile[] => {
         if (!data || typeof data !== "object" || Array.isArray(data)) return [];
         return Object.entries(data).flatMap(([id, credential]) => {
           const value = record(credential),
@@ -155,9 +144,8 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
               : id;
           return [
             {
-              provider,
               id,
-              label: provider === "openai-codex" ? `${label} (Codex)` : label,
+              label: `${label} (Codex)`,
               authKind:
                 type === "api_key" ? ("api-key" as const) : ("oauth" as const),
               isDefault: selected === id,
@@ -167,11 +155,7 @@ async function readCanonicalProfiles(): Promise<StoredProfiles> {
         });
       };
       return {
-        profiles: [
-          ...list("openai", entries, active),
-          ...list("openai-codex", codexEntries, codexActive),
-        ],
-        active,
+        profiles: list(codex?.accounts, codexActive),
         codexActive,
         ...quotaAuth,
         codexDefaultEmail: oauthEmail(quotaAuth.codexDefaultCredential),
@@ -188,9 +172,6 @@ export class NativePiAccounts {
   constructor(controls = createAccountControlsHandlers()) {
     this.controls = controls;
   }
-  applyProvider(input: Parameters<typeof applyPiProvider>[0], context: PluginHandlerContext) {
-    return applyPiProvider(input, context, this.controls);
-  }
   private readonly quotaCache = new Map<
     string,
     { fingerprint: string; at: number; result: QuotaResult }
@@ -198,29 +179,16 @@ export class NativePiAccounts {
   private async quotaFor(
     key: string,
     credential: PiQuotaCredential | undefined,
-    companion: PiQuotaCredential | undefined,
-    companionUsageEnabled: boolean,
     refresh: boolean,
-    provider: NativeProvider,
   ): Promise<QuotaResult> {
     if (!credential) return { usage: null, plan: null };
     const fingerprint = createHash("sha256")
       .update(
-        JSON.stringify([
+        JSON.stringify(
           credential.kind === "oauth"
-            ? [
-                credential.access,
-                credential.accountId,
-                credential.clientId,
-                credential.scopes,
-              ]
+            ? [credential.access, credential.accountId]
             : credential.kind,
-          companion?.kind === "oauth"
-            ? [companion.access, companion.accountId]
-            : companion?.kind,
-          companionUsageEnabled,
-          key === accountId(null, provider),
-        ]),
+        ),
       )
       .digest("hex");
     const cached = this.quotaCache.get(key);
@@ -235,13 +203,7 @@ export class NativePiAccounts {
           ? { ...cached.result.usage, cached: true }
           : null,
       };
-    const result = await fetchPiQuota(
-      credential,
-      provider === "openai" ? companion : undefined,
-      provider === "openai" && companionUsageEnabled,
-      key === accountId(null, provider),
-      provider,
-    );
+    const result = await fetchPiQuota(credential);
     this.quotaCache.set(key, { fingerprint, at: Date.now(), result });
     return result;
   }
@@ -303,62 +265,26 @@ export class NativePiAccounts {
           const agent = targets[cursorIndex++];
           if (!agent) continue;
           try {
-            const modelProvider = agent.model?.startsWith("openai-codex/")
-              ? "openai-codex"
-              : agent.model?.startsWith("openai/")
-                ? "openai"
-                : null;
-            if (!modelProvider) {
-              // Claude-bridge agents use the Claude Code login and are listed under Claude.
-              if (!agent.model?.startsWith("claude-bridge/")) unavailable++;
+            if (!isCodexModel(agent.model)) {
+              if (!isUnmanagedModel(agent.model)) unavailable++;
               continue;
             }
-            let status = await this.controls.status(
+            const status = await this.controls.status(
               {
                 agentId: agent.id,
                 workspaceId: agent.workspaceId,
-                ...(modelProvider === "openai-codex"
-                  ? { providerId: modelProvider }
-                  : {}),
+                providerId: PI_PROVIDER,
               },
               context,
             );
-            if (!status.available || !status.snapshot) {
-              unavailable++;
-              continue;
-            }
-            let snapshot = status.snapshot;
-            let provider: NativeProvider = modelProvider;
-            const initialSessionId = status.sessionId;
-            const initialRuntimeEpoch = status.runtimeEpoch;
-            const initialRoute = snapshot.sessionRouting;
-            if (initialRoute?.version === 1 && initialRoute.providerId !== modelProvider) {
-              provider = initialRoute.providerId;
-              status = await this.controls.status(
-                { agentId: agent.id, workspaceId: agent.workspaceId, providerId: provider },
-                context,
-              );
-              if (!status.available || !status.snapshot ||
-                status.sessionId !== initialSessionId ||
-                status.runtimeEpoch !== initialRuntimeEpoch ||
-                status.snapshot.sessionRouting?.version !== 1 ||
-                status.snapshot.sessionRouting.providerId !== provider ||
-                status.snapshot.sessionRouting.revision !== initialRoute.revision) {
-                unavailable++;
-                continue;
-              }
-              snapshot = status.snapshot;
-            }
-            const route = snapshot.sessionRouting;
+            const snapshot = status.snapshot;
             if (
+              !status.available ||
+              !snapshot ||
               !status.sessionId ||
               status.sessionId !== snapshot.sessionId ||
               !status.runtimeEpoch ||
-              (route?.version === 1 && route.providerId !== provider) ||
-              (route?.version !== 1 && provider !== modelProvider) ||
-              (snapshot.providerId ?? "openai") !== provider ||
-              (provider === "openai-codex" &&
-                !snapshot.supportedProviders?.includes(provider))
+              snapshot.providerId !== PI_PROVIDER
             ) {
               unavailable++;
               continue;
@@ -368,7 +294,7 @@ export class NativePiAccounts {
                 id: `pi-login:${agent.id}:${name}`,
                 family: "pi",
                 method: "code",
-                accountId: accountId(name, provider),
+                accountId: accountId(name),
                 step: "waiting",
                 url: null,
                 codeUrl: null,
@@ -381,7 +307,7 @@ export class NativePiAccounts {
             routes.push({
               agentId: agent.id,
               family: "pi",
-              accountId: accountId(selected, provider),
+              accountId: accountId(selected),
               pinned: selected !== null,
               pendingAccountId: null,
               movable: true,
@@ -392,14 +318,8 @@ export class NativePiAccounts {
               status: agent.status,
             });
             for (const row of snapshot.accounts)
-              if (
-                row.id &&
-                !canonical.some(
-                  (p) => p.id === row.id && p.provider === provider,
-                )
-              )
+              if (row.id && !canonical.some((p) => p.id === row.id))
                 canonical.push({
-                  provider,
                   id: row.id,
                   label: row.label,
                   authKind: row.authKind,
@@ -411,10 +331,7 @@ export class NativePiAccounts {
         }
       }),
     );
-    canonical.sort(
-      (a, b) =>
-        a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
-    );
+    canonical.sort((a, b) => a.id.localeCompare(b.id));
     const quotaById = new Map<string, QuotaResult>();
     let quotaIndex = 0;
     await Promise.all(
@@ -422,36 +339,18 @@ export class NativePiAccounts {
         while (quotaIndex < canonical.length) {
           const p = canonical[quotaIndex++];
           if (!p) continue;
-          const key = accountId(p.id, p.provider);
+          const key = accountId(p.id);
           quotaById.set(
             key,
-            await this.quotaFor(
-              key,
-              p.quotaCredential,
-              stored.companionCredential,
-              stored.companionUsageEnabled === true,
-              refreshUsage,
-              p.provider,
-            ),
+            await this.quotaFor(key, p.quotaCredential, refreshUsage),
           );
         }
       }),
     );
-    const openDefault = await this.quotaFor(
-      accountId(null),
-      stored.defaultCredential,
-      stored.companionCredential,
-      stored.companionUsageEnabled === true,
-      refreshUsage,
-      "openai",
-    );
     const codexDefault = await this.quotaFor(
-      accountId(null, "openai-codex"),
+      accountId(null),
       stored.codexDefaultCredential,
-      undefined,
-      false,
       refreshUsage,
-      "openai-codex",
     );
     const counts = new Map<string, number>();
     for (const route of routes)
@@ -482,16 +381,9 @@ export class NativePiAccounts {
       folders: [],
     });
     const accounts: AccountView[] = [
-      makeAccount(
-        accountId(null),
-        "Default Pi login",
-        openDefault,
-        stored.active === null,
-        "main",
-      ),
       {
         ...makeAccount(
-          accountId(null, "openai-codex"),
+          accountId(null),
           "Codex",
           codexDefault,
           stored.codexActive === null,
@@ -501,9 +393,9 @@ export class NativePiAccounts {
       },
       ...canonical.map((p) =>
         makeAccount(
-          accountId(p.id, p.provider),
+          accountId(p.id),
           p.label,
-          quotaById.get(accountId(p.id, p.provider)) ?? {
+          quotaById.get(accountId(p.id)) ?? {
             usage: null,
             plan: null,
           },
@@ -533,7 +425,7 @@ export class NativePiAccounts {
       ],
       nextUp: {
         ...base.nextUp,
-        pi: stored.active ? accountId(stored.active) : accountId(null),
+        pi: accountId(stored.codexActive),
       },
       agents: [...base.agents.filter((i) => i.family !== "pi"), ...routes],
       installed: [
@@ -554,13 +446,9 @@ export class NativePiAccounts {
       accountName?: string;
       label?: string;
       method?: "oauth" | "api_key";
-      providerId?: NativeProvider;
     },
     context: PluginHandlerContext,
   ) {
-    const provider = request.providerId ?? "openai";
-    if (provider === "openai-codex")
-      await this.requireProviderSupport(provider, context);
     if (request.operation === "remove") {
       const agents = await context.paseo.agents.list({ page: { limit: 200 } });
       if (agents.pageInfo.hasMore)
@@ -572,21 +460,21 @@ export class NativePiAccounts {
           agent.provider !== "pi" ||
           agent.archivedAt ||
           agent.status === "closed" ||
-          !agent.workspaceId
+          !agent.workspaceId ||
+          !isCodexModel(agent.model)
         )
           continue;
         const status = await this.controls.status(
           {
             agentId: agent.id,
             workspaceId: agent.workspaceId,
-            providerId: provider,
+            providerId: PI_PROVIDER,
           },
           context,
         );
         if (
           status.available &&
           !!status.snapshot &&
-          (status.snapshot.providerId ?? "openai") === provider &&
           status.snapshot.currentAccountId === request.accountId
         )
           throw new Error(
@@ -594,137 +482,7 @@ export class NativePiAccounts {
           );
       }
     }
-    return this.controls.manage({ ...request, providerId: provider }, context);
-  }
-  private async requireProviderSupport(
-    provider: NativeProvider,
-    context: PluginHandlerContext,
-  ) {
-    const agents = await context.paseo.agents.list({ page: { limit: 200 } });
-    for (const { agent } of agents.entries) {
-      if (
-        agent.provider !== "pi" ||
-        agent.archivedAt ||
-        agent.status === "closed" ||
-        !agent.workspaceId
-      )
-        continue;
-      const status = await this.controls.status(
-        {
-          agentId: agent.id,
-          workspaceId: agent.workspaceId,
-          providerId: provider,
-        },
-        context,
-      );
-      if (
-        !status.available ||
-        !status.snapshot ||
-        ((status.snapshot.providerId ?? "openai") !== provider &&
-          !(status.snapshot.sessionRouting?.version === 1 &&
-            status.snapshot.supportedProviders?.includes(provider))) ||
-        (provider === "openai-codex" &&
-          !status.snapshot.supportedProviders?.includes(provider))
-      )
-        throw new Error(
-          "This Pi account service does not support Codex profiles; refresh Pi to a provider-aware version.",
-        );
-      return;
-    }
-    throw new Error(
-      "No live Pi account service can verify Codex provider support.",
-    );
-  }
-  /** Explicit selected-session authorization includes replacing a source pin. */
-  async changeProvider(
-    agentId: string,
-    providerId: NativeProvider,
-    expectedAccountId: string,
-    context: PluginHandlerContext,
-  ): Promise<ReopenSummary> {
-    const skipped: ReopenSummary = { reopened: [], deferred: [], failed: [], continuedIn: null };
-    const sourceProvider: NativeProvider = expectedAccountId.startsWith(`${PREFIX}codex:`)
-      ? "openai-codex" : "openai";
-    const defaultId = accountId(null, sourceProvider);
-    const profilePrefix = sourceProvider === "openai-codex" ? `${PREFIX}codex:profile:` : `${PREFIX}profile:`;
-    let sourceName: string | null = null;
-    if (expectedAccountId !== defaultId) {
-      if (!expectedAccountId.startsWith(profilePrefix)) return skipped;
-      try { sourceName = decodeURIComponent(expectedAccountId.slice(profilePrefix.length)); }
-      catch { return skipped; }
-      if (!/^[A-Za-z0-9._-]{1,64}$/.test(sourceName) ||
-          accountId(sourceName, sourceProvider) !== expectedAccountId) return skipped;
-    }
-    try {
-      const current = (await context.paseo.agents.ref(agentId).refresh())?.agent;
-      if (!current || current.id !== agentId || current.provider !== "pi" || current.archivedAt ||
-          !current.workspaceId || !["idle", "error"].includes(current.status)) return skipped;
-      const target = { agentId, workspaceId: current.workspaceId };
-      const read = async (provider: NativeProvider) => {
-        const status = await this.controls.status({ ...target, providerId: provider }, context);
-        const s = status.snapshot;
-        if (!status.available || !s || !status.sessionId || !status.runtimeEpoch ||
-            status.sessionId !== s.sessionId || s.providerId !== provider ||
-            s.guardedDefaultSwitchVersion !== 1 || s.sessionRouting?.version !== 1 ||
-            s.sessionRouting.providerId !== sourceProvider ||
-            !s.supportedProviders?.includes(sourceProvider) || !s.supportedProviders.includes(providerId) ||
-            s.busy || !s.canSwitch || s.activationStatus === "activation-pending" ||
-            s.activationStatus === "activation-failed") return null;
-        return { ...status, snapshot: s };
-      };
-      type Status = NonNullable<Awaited<ReturnType<typeof read>>>;
-      const sameIdentity = (a: Status, b: Status) =>
-        a.sessionId === b.sessionId && a.runtimeEpoch === b.runtimeEpoch &&
-        a.snapshot.serviceEpoch === b.snapshot.serviceEpoch &&
-        a.snapshot.sessionRouting!.revision === b.snapshot.sessionRouting!.revision;
-      const sameSelection = (a: Status, b: Status) => sameIdentity(a, b) &&
-        a.snapshot.selectionRevision === b.snapshot.selectionRevision &&
-        a.snapshot.currentAccountId === b.snapshot.currentAccountId &&
-        a.snapshot.defaultSelected === b.snapshot.defaultSelected;
-      const matchesSource = (s: Status["snapshot"]) => sourceName === null
-        ? s.defaultSelected
-        : !s.defaultSelected && s.currentAccountId === sourceName;
-      const source = await read(sourceProvider);
-      if (!source || !matchesSource(source.snapshot)) return skipped;
-      if (providerId === sourceProvider && source.snapshot.defaultSelected) return skipped;
-      const destination = await read(providerId);
-      if (!destination || !sameIdentity(source, destination)) return skipped;
-      const latest = (await context.paseo.agents.ref(agentId).refresh())?.agent;
-      if (!latest || latest.id !== agentId || latest.provider !== "pi" || latest.archivedAt ||
-          latest.workspaceId !== target.workspaceId || !["idle", "error"].includes(latest.status)) return skipped;
-      const finalDestination = await read(providerId);
-      if (!finalDestination || !sameSelection(destination, finalDestination)) return skipped;
-      const finalSource = await read(sourceProvider);
-      if (!finalSource || !sameSelection(source, finalSource) ||
-          !sameIdentity(finalSource, finalDestination) || !matchesSource(finalSource.snapshot)) return skipped;
-      const result = await this.controls.switch({
-        ...target,
-        expectedSessionId: finalSource.sessionId!,
-        expectedRuntimeEpoch: finalSource.runtimeEpoch!,
-        request: {
-          protocol: 1, requestId: randomUUID(), providerId, accountId: null,
-          expectedSessionId: finalSource.sessionId!,
-          expectedServiceEpoch: finalSource.snapshot.serviceEpoch,
-          expectedSelectionRevision: finalDestination.snapshot.selectionRevision,
-          expectedRoutingRevision: finalSource.snapshot.sessionRouting!.revision,
-          ...(finalSource.snapshot.defaultSelected ? {
-            expectedDefaultSource: { providerId: sourceProvider, selectionRevision: finalSource.snapshot.selectionRevision },
-          } : {}),
-        },
-      }, context);
-      if (!result.ok && ["busy", "stale-selection", "stale-session", "stale-service"].includes(result.reason)) return skipped;
-      if (!result.ok || result.snapshot.sessionId !== finalSource.sessionId ||
-          result.snapshot.serviceEpoch !== finalSource.snapshot.serviceEpoch ||
-          result.snapshot.providerId !== providerId || result.snapshot.sessionRouting?.version !== 1 ||
-          result.snapshot.sessionRouting.providerId !== providerId ||
-          result.snapshot.sessionRouting.revision <= finalSource.snapshot.sessionRouting!.revision ||
-          !result.snapshot.defaultSelected ||
-          result.snapshot.activationStatus === "activation-pending" || result.snapshot.activationStatus === "activation-failed")
-        throw new Error("Unconfirmed provider change");
-      return { ...skipped, reopened: [agentId] };
-    } catch {
-      return { ...skipped, failed: [{ agentId, error: "Pi provider change was not confirmed. Refresh before retrying." }] };
-    }
+    return this.controls.manage({ ...request, providerId: PI_PROVIDER }, context);
   }
   async switch(
     agentId: string,
@@ -733,34 +491,14 @@ export class NativePiAccounts {
     onlyIfIdle = false,
   ) {
     const skipped = { reopened: [], deferred: [], failed: [], continuedIn: null };
-    const parsed =
-      id === null
-        ? { provider: "openai" as NativeProvider, name: null }
-        : id === accountId(null, "openai-codex")
-          ? { provider: "openai-codex" as NativeProvider, name: null }
-          : id.startsWith(`${PREFIX}codex:profile:`)
-            ? {
-                provider: "openai-codex" as NativeProvider,
-                name: decodeURIComponent(
-                  id.slice(`${PREFIX}codex:profile:`.length),
-                ),
-              }
-            : id === accountId(null)
-              ? { provider: "openai" as NativeProvider, name: null }
-              : id.startsWith(`${PREFIX}profile:`)
-                ? {
-                    provider: "openai" as NativeProvider,
-                    name: decodeURIComponent(
-                      id.slice(`${PREFIX}profile:`.length),
-                    ),
-                  }
-                : null;
+    const parsed = id === null ? { name: null } : piAccountName(id);
     if (!parsed)
       throw new Error("Choose a Pi account from the canonical list.");
-    const { provider, name } = parsed;
+    const { name } = parsed;
     const current = (await context.paseo.agents.ref(agentId).refresh())?.agent;
     if (onlyIfIdle && (!current || current.provider !== "pi" ||
-        !["idle", "error"].includes(current.status) || !current.workspaceId || current.archivedAt))
+        !["idle", "error"].includes(current.status) || !current.workspaceId ||
+        current.archivedAt || !isCodexModel(current.model)))
       return skipped;
     if (
       !current ||
@@ -769,15 +507,12 @@ export class NativePiAccounts {
       current.archivedAt
     )
       throw new Error("The selected Pi conversation is no longer available.");
-    const currentModelProvider = typeof current.model === "string" &&
-      current.model.startsWith("openai-codex/") ? "openai-codex" :
-      typeof current.model === "string" && current.model.startsWith("openai/") ? "openai" : null;
-    let status = await this.controls.status(
-      {
-        agentId,
-        workspaceId: current.workspaceId,
-        ...(provider === "openai-codex" ? { providerId: provider } : {}),
-      },
+    if (!isCodexModel(current.model))
+      throw new Error(
+        "Only Pi conversations on a Codex model use these accounts; choose a Codex model first.",
+      );
+    const status = await this.controls.status(
+      { agentId, workspaceId: current.workspaceId, providerId: PI_PROVIDER },
       context,
     );
     if (onlyIfIdle && (!status.available || !status.snapshot)) return skipped;
@@ -785,53 +520,40 @@ export class NativePiAccounts {
       throw new Error(
         status.reason ?? "The selected Pi session has no live account bridge.",
       );
-    let snapshot = status.snapshot;
+    const snapshot = status.snapshot;
     if (onlyIfIdle && (snapshot.busy || !snapshot.canSwitch ||
         snapshot.activationStatus === "activation-pending" ||
-        snapshot.activationStatus === "activation-failed" ||
-        snapshot.guardedDefaultSwitchVersion !== 1 ||
-        snapshot.sessionRouting?.version !== 1 ||
-        snapshot.sessionRouting.providerId !== provider))
+        snapshot.activationStatus === "activation-failed"))
       return skipped;
     if (!status.sessionId || !status.runtimeEpoch || status.sessionId !== snapshot.sessionId)
-      throw new Error("The Pi account service returned stale or missing session metadata; no switch was sent.");
-    let route = snapshot.sessionRouting;
-    if (route?.version !== 1 && currentModelProvider !== provider)
-      throw new Error("This older Pi account service cannot change providers; refresh Pi to a provider-aware version.");
-    if ((snapshot.providerId ?? "openai") !== provider && route?.version !== 1)
-      throw new Error("The Pi account service returned the wrong provider namespace; no switch was sent.");
-    if (route?.version !== 1) {
-      if ((snapshot.providerId ?? "openai") !== provider)
-        throw new Error("This older Pi account service cannot change providers; refresh Pi to a provider-aware version.");
-    } else if (
-      route.providerId !== provider && !snapshot.supportedProviders?.includes(provider)
-    )
-      throw new Error("This Pi account service does not support the requested provider; no switch was sent.");
-    if (name && !status.snapshot.accounts.some((a) => a.id === name))
+      throw new Error(
+        "The Pi account service returned stale or missing session metadata; no switch was sent.",
+      );
+    if (snapshot.providerId !== PI_PROVIDER)
+      throw new Error(
+        "The Pi account service returned the wrong provider; no switch was sent.",
+      );
+    if (name && !snapshot.accounts.some((a) => a.id === name))
       throw new Error(
         "That Pi account is not available in the live Pi session. Refresh its account manager and retry.",
       );
-    if (!status.snapshot.canSwitch)
+    if (!snapshot.canSwitch)
       throw new Error("Wait until Pi is idle before changing its account.");
-    if (provider === "openai-codex")
-      await this.requireProviderSupport(provider, context);
     const result = await this.controls.switch(
       {
         agentId,
         workspaceId: current.workspaceId,
-        expectedSessionId: status.sessionId!,
-        expectedRuntimeEpoch: status.runtimeEpoch!,
+        providerId: PI_PROVIDER,
+        expectedSessionId: status.sessionId,
+        expectedRuntimeEpoch: status.runtimeEpoch,
         request: {
           protocol: 1,
           requestId: randomUUID(),
-          expectedSessionId: status.snapshot.sessionId,
-          expectedServiceEpoch: status.snapshot.serviceEpoch,
-          expectedSelectionRevision: status.snapshot.selectionRevision,
+          expectedSessionId: snapshot.sessionId,
+          expectedServiceEpoch: snapshot.serviceEpoch,
+          expectedSelectionRevision: snapshot.selectionRevision,
           accountId: name,
-          providerId: provider,
-          ...(status.snapshot.sessionRouting?.version === 1
-            ? { expectedRoutingRevision: status.snapshot.sessionRouting.revision }
-            : {}),
+          providerId: PI_PROVIDER,
         },
       },
       context,
@@ -843,11 +565,7 @@ export class NativePiAccounts {
       throw new Error(
         `Pi account switch failed (${result.reason}); refresh before retrying.`,
       );
-    if (
-      (result.snapshot.providerId ?? "openai") !== provider ||
-      (provider === "openai-codex" &&
-        !result.snapshot.supportedProviders?.includes(provider))
-    )
+    if (result.snapshot.providerId !== PI_PROVIDER)
       throw new Error(
         "Pi service returned a mismatched provider after switching.",
       );

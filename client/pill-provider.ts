@@ -1,6 +1,7 @@
-/** Resolve native Pi provider from the authenticated current account route, never a default. */
+/** Pi accounts are Codex logins; name that provider on the pill of an agent routed to one. */
 export function nativePillProvider(accountId: string): string | null {
-  if (accountId === "pi-native:codex:default" || accountId.startsWith("pi-native:codex:profile:")) return "Codex";
-  if (accountId === "pi-native:default" || accountId.startsWith("pi-native:profile:")) return "OpenAI";
-  return null;
+  return accountId === "pi-native:codex:default" ||
+    accountId.startsWith("pi-native:codex:profile:")
+    ? "Codex"
+    : null;
 }

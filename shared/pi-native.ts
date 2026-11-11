@@ -1,10 +1,13 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
+/** The only Pi provider whose accounts this plugin manages. */
+export const PI_PROVIDER = "openai-codex" as const;
+const provider = z.literal(PI_PROVIDER);
 const target = {
   agentId: z.string().min(1).max(256),
   workspaceId: z.string().min(1).max(256),
-  providerId: z.enum(["openai", "openai-codex"]).optional(),
+  providerId: provider,
 };
 const account = z
   .object({
@@ -20,16 +23,8 @@ export const piSnapshotSchema = z
     selectionRevision: z.number().int().nonnegative(),
     sessionId: z.string().min(1).max(256),
     accounts: z.array(account).max(100),
-    providerId: z.enum(["openai", "openai-codex"]).optional(),
-    /** Atomic source-default guard supported by the installed Pi producer. */
-    guardedDefaultSwitchVersion: z.literal(1).optional(),
+    providerId: provider,
     inheritance: z.enum(["inherited", "explicit"]).optional(),
-    sessionRouting: z.object({
-      version: z.literal(1),
-      providerId: z.enum(["openai", "openai-codex"]),
-      revision: z.number().int().nonnegative(),
-    }).strict().optional(),
-    supportedProviders: z.array(z.enum(["openai", "openai-codex"])).optional(),
     currentAccountId: z.string().min(1).max(256).nullable(),
     defaultSelected: z.boolean(),
     activationStatus: z.enum([
@@ -56,12 +51,7 @@ export const piSnapshotSchema = z
           .string()
           .regex(/^[a-f0-9]{64}$/)
           .optional(),
-        providerId: z.enum(["openai", "openai-codex"]).optional(),
-        nativeRegistrationKey: z
-          .string()
-          .regex(/^[a-f0-9]{64}$/)
-          .optional(),
-        nativeRegistrationVersion: z.literal(1).optional(),
+        providerId: provider.optional(),
         settingsUrl: z
           .enum([
             "https://platform.openai.com/settings/organization/usage",
@@ -79,13 +69,8 @@ const request = z
     expectedSessionId: z.string().min(1).max(256),
     expectedServiceEpoch: z.string().min(1).max(256),
     expectedSelectionRevision: z.number().int().nonnegative(),
-    expectedRoutingRevision: z.number().int().nonnegative().optional(),
-    expectedDefaultSource: z.object({
-      providerId: z.enum(["openai", "openai-codex"]),
-      selectionRevision: z.number().int().nonnegative(),
-    }).strict().optional(),
     accountId: z.string().min(1).max(256).nullable(),
-    providerId: z.enum(["openai", "openai-codex"]).optional(),
+    providerId: provider,
   })
   .strict();
 export const piSwitchResultSchema = z.discriminatedUnion("ok", [
@@ -147,25 +132,9 @@ export const piAccountManageRpc = defineRpc({
     accountName: z.string().trim().max(64).optional(),
     label: z.string().trim().max(40).optional(),
     method: z.enum(["oauth", "api_key"]).optional(),
-    providerId: z.enum(["openai", "openai-codex"]).optional(),
   }),
   output: z
     .object({ ok: z.literal(true), accountId: z.string().optional() })
     .strict(),
-});
-export const piApplyProviderRpc = defineRpc({
-  name: "paseo-accounts.pi.provider.apply",
-  // No agent/account/host IDs: discovery and changes stay on this daemon.
-  input: z.object({ providerId: z.enum(["openai", "openai-codex"]), apply: z.boolean() }).strict(),
-  output: z.object({
-    providerId: z.enum(["openai", "openai-codex"]), apply: z.boolean(),
-    eligibleCount: z.number().int().nonnegative(), defaultAccountCount: z.number().int().nonnegative(),
-    currentProvider: z.enum(["openai", "openai-codex", "mixed"]).nullable(),
-    applied: z.array(z.string()),
-    /** Optional for compatibility with early v2 host responses. */
-    skipped: z.array(z.object({ agentId: z.string(), reason: z.string() })).optional(),
-    failed: z.array(z.object({ agentId: z.string(), error: z.string() })),
-    pinnedCount: z.number().int().nonnegative(), alreadySelectedCount: z.number().int().nonnegative(), discoveryComplete: z.boolean(),
-  }).strict(),
 });
 export type PiNativeSnapshot = z.infer<typeof piSnapshotSchema>;

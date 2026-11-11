@@ -1,6 +1,4 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
-import { HostBinding } from "./client/host-binding";
-import { createHostBinding } from "./client/host-registry";
 import { AccountsSurface } from "./client/accounts-surface";
 import { contributeCommands } from "./client/commands";
 import { contributePills } from "./client/pills";
@@ -13,12 +11,15 @@ import { SWITCH_ROW_KIND, SWITCH_ROW_VERSION, SwitchRowSchema } from "./shared/t
 export default function contribute(client: PluginClientContext) {
   const store = createStore(client);
   store.start();
-  const binding = createHostBinding(store);
 
-  client.addSurface("accounts", (props) => <HostBinding host={props.host} binding={binding}><AccountsSurface {...props} store={store} /></HostBinding>);
+  client.addSurface("accounts", (props) => <AccountsSurface {...props} store={store} />);
   // Paseo 0.12+ lets the row show a badge; older hosts only take the plain item.
   if (typeof client.addSidebarHeaderItem === "function") {
-    client.addSidebarHeaderItem({ id: "accounts", title: "Accounts", Component: (props) => <HostBinding host={props.host} binding={binding}><AccountsSidebarRow {...props} store={store} /></HostBinding> });
+    client.addSidebarHeaderItem({
+      id: "accounts",
+      title: "Accounts",
+      Component: (props) => <AccountsSidebarRow {...props} store={store} />,
+    });
   } else {
     client.addSidebarItem({ id: "accounts", title: "Accounts", icon: "Users", surface: "accounts" });
   }
@@ -41,7 +42,6 @@ export default function contribute(client: PluginClientContext) {
   const stopPills = contributePills(client, store);
 
   return () => {
-    binding.dispose();
     stopPills();
     stopCommands();
     store.stop();
