@@ -56,6 +56,30 @@ const context = () =>
     },
   }) as never;
 describe("provider-aware native Pi accounts", () => {
+  it("leaves claude-bridge agents to the Claude section without a warning", async () => {
+    await fixture();
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 500 }));
+    const agent = (id: string, model: string) => ({
+      agent: { id, provider: "pi", model, status: "idle", workspaceId: "w", cwd: "/w", archivedAt: null },
+    });
+    const status = vi.fn(async () => ({ available: false }));
+    const ctx = {
+      paseo: {
+        agents: {
+          list: async () => ({
+            entries: [agent("bridge", "claude-bridge/claude-opus-5-5"), agent("other", "local/llama")],
+            pageInfo: { hasMore: false },
+          }),
+        },
+      },
+    } as never;
+    const out = await new NativePiAccounts({ status } as never).view(state(), ctx, true);
+    expect(status).not.toHaveBeenCalled();
+    expect(out.agents).toEqual([]);
+    expect(out.warnings).toContain(
+      "1 Pi sessions are not connected to the live account switcher; their current selection is left unknown.",
+    );
+  });
   it("keeps same-name OpenAI/Codex profiles distinct and represents both defaults", async () => {
     const pi = await fixture();
     await credentials(pi, {
