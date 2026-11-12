@@ -5,6 +5,8 @@ import { defineConfig } from "vitest/config";
 // Use the same pinned, bundled helper implementation as the production compiler.
 const compiler = process.env.PASEO_PLUGIN_COMPILER;
 export default defineConfig({
+  // The .mjs tests use node:test and run with node --test.
+  test: { include: ["**/*.test.ts"], exclude: ["node_modules/**"] },
   resolve: compiler
     ? {
         alias: {

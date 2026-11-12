@@ -135,7 +135,7 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
                 {
                   id: "accounts",
                   label: "Accounts",
-                  count: layout.compact ? undefined : state.accounts.filter((account) => accountFamilies.includes(account.family)).length,
+                  count: layout.compact ? undefined : state.accounts.filter((account) => account.family !== "codex" && accountFamilies.includes(account.family)).length,
                 },
                 { id: "agents", label: "Agents", count: layout.compact ? undefined : liveAgents.length },
                 { id: "projects", label: "Projects", count: layout.compact ? undefined : folderCount },
