@@ -114,6 +114,8 @@ async function setUp(state: Partial<StoredState>, hit: () => LimitHit, options: 
     families as unknown as FamilyResolver,
     reopener as unknown as Reopener,
   );
+  // Failover is off by default; these tests are about what happens when it's on.
+  service.setPreferences(SWITCHING);
   const limitTurn = () =>
     service.onTurnEnded(
       { agent: { id: AGENT, provider: "claude" }, turnId: "t", outcome: { kind: "failed", error: { message: "limit" } }, timeline: [] } as never,
@@ -122,6 +124,7 @@ async function setUp(state: Partial<StoredState>, hit: () => LimitHit, options: 
   return { service, store, reopened, limitTurn, ...fake };
 }
 
+const SWITCHING = preferences.schema.parse({ autoSwitch: true });
 const inFuture = () => new Date(Date.now() + 30 * 60_000).toISOString();
 const inPast = () => new Date(Date.now() - 60_000).toISOString();
 
@@ -332,7 +335,7 @@ describe("forking to the other provider", () => {
       { resolve: async () => ({ claude: "claude" as const, codex: "codex" as const }) } as unknown as FamilyResolver,
       { locate: async () => "/usr/local/bin/paseo", reopen: async () => ({ ok: true as const }) } as unknown as Reopener,
     );
-    service.setPreferences(preferences.schema.parse({ forkOtherProvider: true }));
+    service.setPreferences(preferences.schema.parse({ autoSwitch: true, forkOtherProvider: true }));
     const context = { paseo } as never;
     const limitTurn = () =>
       service.onTurnEnded(
@@ -608,7 +611,7 @@ describe("forking further down the provider order", () => {
       { resolve: async () => ({ claude: "claude", codex: "codex", kimi: "kimi", pi: "pi" }) } as unknown as FamilyResolver,
       { locate: async () => "/usr/local/bin/paseo", reopen: async () => ({ ok: true as const }) } as unknown as Reopener,
     );
-    service.setPreferences(preferences.schema.parse({ forkOtherProvider: true }));
+    service.setPreferences(preferences.schema.parse({ autoSwitch: true, forkOtherProvider: true }));
     const limitTurn = () =>
       service.onTurnEnded(
         { agent: { id: AGENT, provider: "claude" }, turnId: "t", outcome: { kind: "failed", error: { message: "limit" } }, timeline: [] } as never,
@@ -628,12 +631,11 @@ describe("forking further down the provider order", () => {
     expect(notes.at(-1)).toMatchObject({ outcome: "continued", toFamily: "kimi", continuedIn: { agentId: fork?.agentId } });
   });
 
-  it("forks to a provider without modes with its own default permissions", async () => {
-    const { created, notes, limitTurn } = await setUpFallback({ codex: true, kimi: true });
+  it("doesn't fork to Pi, whose accounts Pi manages itself", async () => {
+    const { created, notes, limitTurn } = await setUpFallback({ codex: true, kimi: true }, false);
     await limitTurn();
-    expect(created).toHaveLength(1);
-    expect(created[0]?.config).toEqual({ provider: "pi/pi-default" });
-    expect(notes.at(-1)).toMatchObject({ outcome: "continued", toFamily: "pi" });
+    expect(created).toHaveLength(0);
+    expect(notes.at(-1)?.outcome).toBe("stayed");
   });
 
   it("keeps the agent when no provider has room, saying why for each", async () => {
@@ -693,7 +695,7 @@ describe("changing the default account", () => {
       resetsAt: inFuture(),
       message: "",
     }));
-    service.setPreferences(preferences.schema.parse({ moveAgentsOnDefaultChange: false }));
+    service.setPreferences(preferences.schema.parse({ autoSwitch: true, moveAgentsOnDefaultChange: false }));
     const paseo = fakePaseo().paseo as never;
 
     const summary = await service.setDefault(paseo, HELLO);
@@ -708,7 +710,7 @@ describe("changing the default account", () => {
 
   const WORK = "claude-work";
   const CODEX_MAIN = MAIN_ACCOUNT_ID.codex;
-  const KEEP = preferences.schema.parse({ moveAgentsOnDefaultChange: false });
+  const KEEP = preferences.schema.parse({ autoSwitch: true, moveAgentsOnDefaultChange: false });
   const NOTHING_MOVED = { reopened: [], deferred: [], failed: [], continuedIn: null };
   const session = (accountId: string) => ({ accountId, family: "claude" as const, openedAt });
 

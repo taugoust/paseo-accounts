@@ -166,7 +166,7 @@ function retainPiAccountsDuringBridgeFailure(
       ...next.accounts.filter((account) => account.family !== "pi"),
       ...cachedPiAccounts,
     ],
-    installed: [...new Set([...next.installed, "pi"])],
+    installed: [...new Set([...next.installed, "pi" as const])],
   };
 }
 

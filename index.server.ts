@@ -141,36 +141,30 @@ export default function contribute(server: PluginServerContext) {
     }
   });
   server.handle(piAccountManageRpc, async (input, context) => {
-    const result = await nativePi.manage(input, context);
-    return {
-      ok: true as const,
-      ...(typeof result?.accountId === "string"
-        ? { accountId: result.accountId }
-        : {}),
-    };
+    const accountId = returnedAccountId(await nativePi.manage(input, context));
+    return { ok: true as const, ...(accountId ? { accountId } : {}) };
   });
   server.handle(
     startLogin,
     async ({ family, method, accountId }, context) => {
       if (family === "pi") {
         const name = accountId ? piAccountName(accountId)?.name : undefined;
-        const result = await nativePi.manage(
+        const created = returnedAccountId(await nativePi.manage(
           {
             operation: "add",
             ...(name ? { accountName: name } : {}),
             method: "oauth",
           },
           context,
-        );
+        ));
         return {
           id: randomUUID(),
-          family: "pi",
+          family: "pi" as const,
           method,
-          accountId:
-            typeof result?.accountId === "string"
-              ? `pi-native:codex:profile:${encodeURIComponent(result.accountId)}`
-              : null,
-          step: "done",
+          accountId: created
+            ? `pi-native:codex:profile:${encodeURIComponent(created)}`
+            : null,
+          step: "done" as const,
           url: null,
           codeUrl: null,
           userCode: null,
@@ -291,4 +285,10 @@ export default function contribute(server: PluginServerContext) {
     stopSettings();
     await service.stop();
   };
+}
+
+/** The account ID Pi's account controls report back, if any. */
+function returnedAccountId(result: unknown): string | undefined {
+  const accountId = (result as { accountId?: unknown } | undefined)?.accountId;
+  return typeof accountId === "string" ? accountId : undefined;
 }
