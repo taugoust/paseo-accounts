@@ -5,7 +5,7 @@ import type {
 	PluginClientContext,
 } from "@getpaseo/plugin/client";
 import { nativePillProvider } from "./pill-provider";
-import { formatPercent, peakUsage, shortLabel } from "../shared/format";
+import { formatPercent, peakUsage } from "../shared/format";
 import {
 	FAMILY_LABEL,
 	fallbackFamilies,
@@ -288,7 +288,7 @@ function buttonFor(
 		return {
 			title: `Account: ${current.label}`,
 			icon: "CircleUserRound",
-			label: shortLabel(current),
+			label: (isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family),
 			behavior: { kind: "menu", items },
 		};
 	}
@@ -350,7 +350,8 @@ function buttonFor(
 	return {
 		title: `Account: ${current.label}${current.email && current.email !== current.label ? ` (${current.email})` : ""}`,
 		icon: current.status === "limited" ? "CircleAlert" : "CircleUserRound",
-		label: `${piAgent ? `${(isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family)} · ` : ""}${shortLabel(current)}${pending}`,
+		// Only the provider, to keep the pill small. The account name is in the title and the menu.
+		label: `${(isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family)}${pending}`,
 		behavior: { kind: "menu", items },
 	};
 }
