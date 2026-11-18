@@ -218,7 +218,11 @@ function buttonFor(
 		(isPi ? undefined : accounts.find((account) => account.isDefault) ?? accounts[0]);
 	if (!current) return routingOnly();
 	const sessionTitle = `${(isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family)} (${current.label})`;
-	const subagentItems = piAgent ? subagentMenu(routing, sessionTitle) : [];
+	const defaults = {
+		claude: state.accounts.find((account) => account.family === "claude" && account.isDefault)?.label,
+		codex: state.accounts.find((account) => account.id === "pi-native:codex:default")?.label,
+	};
+	const subagentItems = piAgent ? subagentMenu(routing, sessionTitle, defaults) : [];
 	// A banked reset is worth offering right where the agent stopped, even with a single account.
 	const resets = current.usage?.resets ?? null;
 	const offerReset =

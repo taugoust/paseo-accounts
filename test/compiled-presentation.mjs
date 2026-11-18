@@ -134,7 +134,9 @@ test('compiled Pi pill offers only usable Claude and Codex subagent routes', asy
   const mounted = await mountPills(status);
   try {
     const choices = mounted.items().filter(item => item.id.startsWith('subagent-'));
-    assert.deepEqual(choices.map(item => item.id), ['subagent-follow','subagent-claude','subagent-codex','subagent-codex-native-account-id','subagent-codex-second-native-id']);
+    // The session already runs on the default Claude login, so that login is listed once.
+    assert.deepEqual(choices.map(item => item.id), ['subagent-follow','subagent-codex','subagent-codex-native-account-id','subagent-codex-second-native-id']);
+    assert.equal(new Set(choices.map(item => item.title)).size, choices.length, 'every account name appears once');
     assert.equal(mounted.item('subagent-follow').icon, 'CircleCheck');
     const base = mounted.button.label;
     await mounted.item('subagent-codex-native-account-id').behavior.onPress();
@@ -142,10 +144,8 @@ test('compiled Pi pill offers only usable Claude and Codex subagent routes', asy
     assert.equal(mounted.item('subagent-codex-native-account-id').icon, 'CircleCheck');
     assert.notEqual(mounted.button.label, base, 'non-default routing stays visible on the pill');
     assert.ok(mounted.button.title.includes('Work label'));
-    await mounted.item('subagent-claude').behavior.onPress();
-    assert.deepEqual(mounted.sets()[1].input.request.selection, {providerId:'claude-bridge',accountId:null}, 'Claude only supports its default login');
     await mounted.item('subagent-follow').behavior.onPress();
-    assert.equal(mounted.sets()[2].input.request.selection, null);
+    assert.equal(mounted.sets()[1].input.request.selection, null);
     assert.equal(mounted.button.label, base);
     assert.ok(mounted.calls.every(call => call.rpc.name.includes('.subagent-routing.')), 'subagent choices never switch the parent account');
   } finally { mounted.stop(); }
@@ -163,6 +163,18 @@ test('compiled Pi pill omits unavailable families and keeps a saved choice visib
     assert.equal(mounted.item('subagent-saved').disabled, true, 'missing saved accounts are informational, not usable choices');
     await mounted.item('subagent-follow').behavior.onPress();
     assert.equal(mounted.sets()[0].input.request.selection, null);
+  } finally { mounted.stop(); }
+});
+
+test('compiled Pi pill on Codex offers the default Claude login by name', async () => {
+  const mounted = await mountPills(routingStatus(), {family:'pi'});
+  try {
+    const choices = mounted.items().filter(item => item.id.startsWith('subagent-'));
+    assert.ok(choices.some(item => item.id === 'subagent-claude'));
+    assert.equal(choices.some(item => item.id === 'subagent-codex'), false, 'the session already names the default Codex login');
+    assert.equal(new Set(choices.map(item => item.title)).size, choices.length);
+    await mounted.item('subagent-claude').behavior.onPress();
+    assert.deepEqual(mounted.sets()[0].input.request.selection, {providerId:'claude-bridge',accountId:null}, 'Claude only supports its default login');
   } finally { mounted.stop(); }
 });
 
