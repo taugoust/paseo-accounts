@@ -199,10 +199,12 @@ function buttonFor(
 	const piAgent = agent.provider === "pi";
 	const suffix = piAgent ? subagentSuffix(routing) : "";
 	const labelSuffix = piAgent ? subagentSuffix(routing, true) : "";
-	const subagentItems = piAgent ? subagentMenu(routing) : [];
-	const routingOnly = (): PluginButton | null => subagentItems.length === 0 ? null : {
+	const routingOnly = (): PluginButton | null => {
+		const items = piAgent ? subagentMenu(routing) : [];
+		return items.length === 0 ? null : {
 		title: `Pi${suffix}`, label: `Pi${labelSuffix}`, icon: "CircleUserRound",
-		behavior: { kind: "menu", items: subagentItems },
+		behavior: { kind: "menu", items },
+		};
 	};
 	// A route knows the agent's account family (a Pi agent on claude-bridge runs on Claude's).
 	const family = route?.family ?? state.providers[agent.provider];
@@ -215,6 +217,8 @@ function buttonFor(
 		accounts.find((account) => account.id === route?.accountId) ??
 		(isPi ? undefined : accounts.find((account) => account.isDefault) ?? accounts[0]);
 	if (!current) return routingOnly();
+	const sessionTitle = `${(isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family)} (${current.label})`;
+	const subagentItems = piAgent ? subagentMenu(routing, sessionTitle) : [];
 	// A banked reset is worth offering right where the agent stopped, even with a single account.
 	const resets = current.usage?.resets ?? null;
 	const offerReset =

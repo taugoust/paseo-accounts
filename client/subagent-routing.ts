@@ -99,12 +99,13 @@ export function subagentSuffix(routing?: Routing, compact = false): string {
 	return ` · Subagents ${provider}${!compact && selection.accountId ? ` (${account?.label ?? selection.accountId})` : ""}`;
 }
 
-export function subagentMenu(routing?: Routing): PluginButtonMenuEntry[] {
+/** sessionTitle names the account the session runs on, which subagents use when they follow it. */
+export function subagentMenu(routing?: Routing, sessionTitle = "Same as session"): PluginButtonMenuEntry[] {
 	const status = routing?.status;
 	if (!routing || !status?.available || !status.snapshot) return [];
 	const active = status.snapshot.selection;
 	const choices = [
-		{ id: "follow", title: "Follow session", selection: null },
+		{ id: "follow", title: sessionTitle, selection: null },
 		...(status.providers.includes("claude-bridge") ? [{ id: "claude", title: "Claude (default login)", selection: { providerId: "claude-bridge", accountId: null } }] : []),
 		...(status.providers.includes("openai-codex") ? [
 			{ id: "codex", title: "Codex (default login)", selection: { providerId: "openai-codex", accountId: null } },
@@ -115,10 +116,13 @@ export function subagentMenu(routing?: Routing): PluginButtonMenuEntry[] {
 	if (active?.providerId === "openai-codex" && active.accountId && !choices.some(choice => choice.selection?.providerId === active.providerId && choice.selection.accountId === active.accountId)) {
 		choices.push({ id: "saved", title: `Codex (${active.accountId})`, selection: { providerId: active.providerId, accountId: active.accountId } });
 	}
+	// The session's own account already appears first, so drop its duplicate unless it is the saved choice.
+	const shown = choices.filter((choice, index) => index === 0 || choice.title !== sessionTitle
+		|| (active?.providerId === choice.selection?.providerId && (active?.accountId ?? null) === (choice.selection?.accountId ?? null)));
 	return [
 		{ kind: "separator", id: "subagents-divider" },
 		{ kind: "item", id: "subagents-heading", title: "Subagents", disabled: true, behavior: { kind: "action", onPress() {} } },
-		...choices.map(choice => {
+		...shown.map(choice => {
 			const selected = (active?.providerId ?? null) === (choice.selection?.providerId ?? null) && (active?.accountId ?? null) === (choice.selection?.accountId ?? null);
 			return {
 				kind: "item" as const, id: `subagent-${choice.id}`, title: choice.title,
