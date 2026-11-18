@@ -17,7 +17,12 @@ import {
   piAccountName,
   refusePiManagement,
 } from "./server/pi-native-view";
-import { piAccountManageRpc } from "./shared/pi-native";
+import {
+  piAccountManageRpc,
+  subagentRoutingSetRpc,
+  subagentRoutingStatusRpc,
+} from "./shared/pi-native";
+import { createSubagentRoutingHandlers } from "./server/subagent-routing";
 /** The Pi profile an account ID names: `null` for the Codex default login. */
 function nativePiAccount(id: string): string | null {
   const parsed = piAccountName(id);
@@ -56,6 +61,7 @@ export default function contribute(server: PluginServerContext) {
     omp: new OmpAdapter(),
   });
   const nativePi = new NativePiAccounts();
+  const subagentRouting = createSubagentRoutingHandlers();
   const settings = server.registerSettings(preferences);
   const applySettings = (
     state: PluginSettingsState<typeof preferences.schema>,
@@ -140,6 +146,8 @@ export default function contribute(server: PluginServerContext) {
       };
     }
   });
+  server.handle(subagentRoutingStatusRpc, subagentRouting.status);
+  server.handle(subagentRoutingSetRpc, subagentRouting.set);
   server.handle(piAccountManageRpc, async (input, context) => {
     const accountId = returnedAccountId(await nativePi.manage(input, context));
     return { ok: true as const, ...(accountId ? { accountId } : {}) };
