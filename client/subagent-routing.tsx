@@ -55,7 +55,7 @@ export function SubagentRouting({ theme, session, store }: { theme: Theme; sessi
   return <Card theme={theme}>
     <View style={{ gap: 8 }}>
       <Text style={text.heading}>Subagents · {session.title ?? session.agentId}</Text>
-        <Text style={text.small}>{active ? `Active ${active.providerId} · ${status.codexAccounts.find(account => account.id === active.accountId)?.label ?? active.accountId ?? "default login"}` : "Active Follow this session"}</Text>
+        <Text style={text.small}>{active ? `Using ${active.providerId} · ${status.codexAccounts.find(account => account.id === active.accountId)?.label ?? active.accountId ?? "default login"}` : "Following this session"}</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
           {option("Follow session", !active, () => void select(null), "follow")}
           {choices.map((choice) => {
