@@ -18,6 +18,7 @@ import { setAgentAccount } from "../shared/rpc";
 import { forkPopover } from "./fork-confirm";
 import { resetPopover } from "./reset-confirm";
 import type { AccountsStore } from "./store";
+import { createSubagentRouting, subagentMenu, subagentSuffix } from "./subagent-routing";
 
 /** The most agents Paseo returns per page. */
 const PAGE_SIZE = 200;
@@ -45,9 +46,11 @@ export function contributePills(
 	>();
 	const lifetime = new AbortController();
 	let stopped = false;
+	const subagents = createSubagentRouting(client, sync);
 
 	function sync(): void {
 		if (stopped) return;
+		subagents.sync(agents.values());
 		const state = store.current.state;
 		for (const [agentId, pill] of pills) {
 			if (!agents.has(agentId)) {
@@ -56,7 +59,7 @@ export function contributePills(
 			}
 		}
 		for (const agent of agents.values()) {
-			const button = state ? buttonFor(client, store, state, agent) : null;
+			const button = state ? buttonFor(client, store, state, agent, subagents.get(agent.id)) : null;
 			const existing = pills.get(agent.id);
 			if (!button) {
 				existing?.registration.remove();
@@ -175,6 +178,7 @@ export function contributePills(
 
 	return () => {
 		stopped = true;
+		subagents.stop();
 		lifetime.abort();
 		unsubscribeStore();
 		for (const pill of pills.values()) pill.registration.remove();
@@ -187,23 +191,30 @@ function buttonFor(
 	store: AccountsStore,
 	state: StateView,
 	agent: TrackedAgent,
+	routing?: ReturnType<ReturnType<typeof createSubagentRouting>["get"]>,
 ): PluginButton | null {
 	if (!state.showComposerPill) return null;
 	const route = state.agents.find((entry) => entry.agentId === agent.id);
+	// Pi agents always get a pill, also when they run on Claude's accounts.
+	const piAgent = agent.provider === "pi";
+	const suffix = piAgent ? subagentSuffix(routing) : "";
+	const labelSuffix = piAgent ? subagentSuffix(routing, true) : "";
+	const subagentItems = piAgent ? subagentMenu(routing) : [];
+	const routingOnly = (): PluginButton | null => subagentItems.length === 0 ? null : {
+		title: `Pi${suffix}`, label: `Pi${labelSuffix}`, icon: "CircleUserRound",
+		behavior: { kind: "menu", items: subagentItems },
+	};
 	// A route knows the agent's account family (a Pi agent on claude-bridge runs on Claude's).
 	const family = route?.family ?? state.providers[agent.provider];
-	if (!family) return null;
+	if (!family || (family === "pi" && !route)) return routingOnly();
 	const isPi = family === "pi";
-	// Pi agents always get a pill naming the provider, also when they run on Claude's accounts.
-	const piAgent = agent.provider === "pi";
 	const accounts = state.accounts.filter(
 		(account) => account.family === family,
 	);
-	if (isPi && !route) return null;
 	const current =
 		accounts.find((account) => account.id === route?.accountId) ??
 		(isPi ? undefined : accounts.find((account) => account.isDefault) ?? accounts[0]);
-	if (!current) return null;
+	if (!current) return routingOnly();
 	// A banked reset is worth offering right where the agent stopped, even with a single account.
 	const resets = current.usage?.resets ?? null;
 	const offerReset =
@@ -273,6 +284,7 @@ function buttonFor(
 	}));
 	if (isPi) {
 		items.push(
+			...subagentItems,
 			{ kind: "separator", id: "manage-divider" },
 			{
 				kind: "item",
@@ -286,9 +298,9 @@ function buttonFor(
 			},
 		);
 		return {
-			title: `Account: ${current.label}`,
+			title: `Account ${current.label}${suffix}`,
 			icon: "CircleUserRound",
-			label: (isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family),
+			label: `${nativePillProvider(current.id) ?? familyLabel(family)}${labelSuffix}`,
 			behavior: { kind: "menu", items },
 		};
 	}
@@ -322,7 +334,7 @@ function buttonFor(
 	}
 	if (wayOut.length > 0)
 		items.unshift(...wayOut, { kind: "separator", id: "way-out-divider" });
-	items.push({ kind: "separator", id: "manage-divider" });
+	items.push(...subagentItems, { kind: "separator", id: "manage-divider" });
 	if (route?.pinned && movable) {
 		const fallback = accounts.find((account) => account.isDefault);
 		items.push({
@@ -348,10 +360,10 @@ function buttonFor(
 
 	const pending = route?.pendingAccountId ? " (after this turn)" : "";
 	return {
-		title: `Account: ${current.label}${current.email && current.email !== current.label ? ` (${current.email})` : ""}`,
+		title: `Account ${current.label}${current.email && current.email !== current.label ? ` (${current.email})` : ""}${suffix}`,
 		icon: current.status === "limited" ? "CircleAlert" : "CircleUserRound",
 		// Only the provider, to keep the pill small. The account name is in the title and the menu.
-		label: `${(isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family)}${pending}`,
+		label: `${(isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family)}${pending}${labelSuffix}`,
 		behavior: { kind: "menu", items },
 	};
 }

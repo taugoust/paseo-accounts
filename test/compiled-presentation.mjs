@@ -46,7 +46,7 @@ const activity = await compile('../client/activity-tab.tsx');
 const agents = await compile('../client/agents-tab.tsx');
 const projects = await compile('../client/projects-tab.tsx');
 const addAccount = await compile('../client/add-account.tsx');
-const subagents = await compile('../client/subagent-routing.tsx');
+const pills = await compile('../client/pills.ts');
 const sampleSource = stripTypeScriptTypes(await readFile(new URL('../preview/sample.ts', import.meta.url), 'utf8'), { mode:'transform' });
 const { sample } = await import(`data:text/javascript;base64,${Buffer.from(sampleSource).toString('base64')}`);
 const nodes = value => Array.isArray(value) ? value.flatMap(nodes) : !value || typeof value !== 'object' ? [] : typeof value.type === 'function' ? nodes(value.type(value.props)) : [value, ...nodes(value.props.children)];
@@ -128,89 +128,147 @@ test('compiled Accounts remains compatible with state views without subagent ses
   assert.ok(tree, 'older state views still render without routing metadata');
 });
 
-test('compiled Subagents hides when the routing service is missing', async () => {
-  const mounted = await mountSubagents({ available:false, sessionId:null, runtimeEpoch:null, snapshot:null, providers:[], codexAccounts:[], reason:'unavailable' });
-  assert.equal(mounted.tree, null);
-  assert.equal(mounted.calls.some(call => call.rpc.name.includes('.switch')), false);
-  mounted.restore();
+test('compiled Pi pill offers only usable Claude and Codex subagent routes', async () => {
+  const status = routingStatus();
+  status.providers.push('amazon-bedrock', 'groq', 'openai', 'xiaomi');
+  const mounted = await mountPills(status);
+  try {
+    const choices = mounted.items().filter(item => item.id.startsWith('subagent-'));
+    assert.deepEqual(choices.map(item => item.id), ['subagent-follow','subagent-claude','subagent-codex','subagent-codex-native-account-id','subagent-codex-second-native-id']);
+    assert.equal(mounted.item('subagent-follow').icon, 'CircleCheck');
+    const base = mounted.button.label;
+    await mounted.item('subagent-codex-native-account-id').behavior.onPress();
+    assert.deepEqual(mounted.sets()[0].input.request.selection, {providerId:'openai-codex',accountId:'native-account-id'});
+    assert.equal(mounted.item('subagent-codex-native-account-id').icon, 'CircleCheck');
+    assert.notEqual(mounted.button.label, base, 'non-default routing stays visible on the pill');
+    assert.ok(mounted.button.title.includes('Work label'));
+    await mounted.item('subagent-claude').behavior.onPress();
+    assert.deepEqual(mounted.sets()[1].input.request.selection, {providerId:'claude-bridge',accountId:null}, 'Claude only supports its default login');
+    await mounted.item('subagent-follow').behavior.onPress();
+    assert.equal(mounted.sets()[2].input.request.selection, null);
+    assert.equal(mounted.button.label, base);
+    assert.ok(mounted.calls.every(call => call.rpc.name.includes('.subagent-routing.')), 'subagent choices never switch the parent account');
+  } finally { mounted.stop(); }
 });
 
-test('compiled Subagents offers follow, provider defaults and named native account IDs', async () => {
-  let finishSet, holdFirst = true;
-  const mounted = await mountSubagents(routingStatus(), () => holdFirst ? (holdFirst = false, new Promise(resolve => { finishSet = resolve; })) : undefined);
-  let tree = mounted.tree;
-  const defaultChoice = nodes(tree).find(node => node.type === 'Pressable' && text(node).includes('openai') && !text(node).includes('openai-codex'));
-  assert.ok(defaultChoice);
-  defaultChoice.props.onPress();
-  tree = mounted.draw();
-  assert.ok(nodes(tree).filter(node => node.type==='Pressable').every(node => node.props.disabled), 'all choices disable while saving');
-  finishSet(); await settle(); tree = mounted.draw();
-  assert.deepEqual(mounted.calls.find(call => call.rpc.name.endsWith('.set')).input.request.selection, {providerId:'openai',accountId:null});
-  pressWith(tree, 'Work label').props.onPress(); await settle(); tree = mounted.draw();
-  assert.deepEqual(mounted.calls.filter(call => call.rpc.name.endsWith('.set'))[1].input.request.selection, {providerId:'openai-codex',accountId:'native-account-id'});
-  followChoice(tree).props.onPress(); await settle();
-  assert.equal(mounted.calls.filter(call => call.rpc.name.endsWith('.set'))[2].input.request.selection, null);
-  assert.equal(mounted.calls.some(call => call.rpc.name.includes('.switch')), false, 'subagent settings never invoke parent account switching');
-  mounted.restore();
+test('compiled Pi pill omits unavailable families and keeps a saved choice visible with one account', async () => {
+  const status = routingStatus({providerId:'openai-codex',accountId:'saved-native-id'});
+  status.providers = ['openai-codex'];
+  const mounted = await mountPills(status, {family:'pi'});
+  try {
+    assert.ok(mounted.button);
+    assert.equal(mounted.items().some(item => item.id === 'subagent-claude'), false);
+    assert.ok(mounted.button.title.includes('saved-native-id'));
+    assert.equal(mounted.item('subagent-saved').icon, 'CircleCheck');
+    assert.equal(mounted.item('subagent-saved').disabled, true, 'missing saved accounts are informational, not usable choices');
+    await mounted.item('subagent-follow').behavior.onPress();
+    assert.equal(mounted.sets()[0].input.request.selection, null);
+  } finally { mounted.stop(); }
 });
 
-test('compiled Subagents shows a saved named selection and can reset it', async () => {
-  const status = routingStatus({ providerId:'openai-codex', accountId:'saved-native-id' });
-  const mounted = await mountSubagents(status);
-  assert.ok(text(mounted.tree).includes('saved-native-id'));
-  followChoice(mounted.tree).props.onPress(); await settle();
-  assert.equal(mounted.calls.find(call => call.rpc.name.endsWith('.set')).input.request.selection, null);
-  mounted.restore();
+test('compiled Pi pill works when the session has no managed account route', async () => {
+  const mounted = await mountPills(routingStatus({providerId:'claude-bridge',accountId:null}), {unrouted:true});
+  try {
+    assert.ok(mounted.button);
+    assert.equal(mounted.item('subagent-claude').icon, 'CircleCheck');
+    await mounted.item('subagent-follow').behavior.onPress();
+    assert.equal(mounted.sets()[0].input.request.selection, null);
+  } finally { mounted.stop(); }
 });
 
-test('compiled Subagents refreshes after stale set and retains a short error', async () => {
-  const mounted = await mountSubagents(routingStatus(), async (_input, current) => { throw Error('stale-selection'); });
-  pressWith(mounted.tree, 'Work label').props.onPress(); await settle();
-  const tree = mounted.draw();
-  const alert = nodes(tree).find(node => node.props.accessibilityRole === 'alert');
-  const error = text(alert);
-  assert.ok(error && error.length < 100);
-  assert.equal(error.includes('stale-selection'), false, 'service rejection codes are not exposed as UI copy');
-  assert.equal(mounted.calls.filter(call => call.rpc.name.endsWith('.status')).length, 2);
-  assert.equal(mounted.calls.some(call => call.rpc.name.includes('.switch')), false);
-  mounted.restore();
+test('compiled Pi pill hides unsupported controls and leaves native agents unchanged', async () => {
+  const mounted = await mountPills({...routingStatus(),available:false,snapshot:null});
+  try {
+    assert.equal(mounted.items().some(item => item.id.startsWith('subagent-')), false);
+  } finally { mounted.stop(); }
+  const native = await mountPills(routingStatus(), {provider:'claude'});
+  try {
+    assert.equal(native.button, null, 'single-account native agents retain the hidden pill');
+    assert.equal(native.calls.length, 0);
+  } finally { native.stop(); }
+});
+
+test('compiled Pi pill disables duplicate saves and refreshes stale routing before retry', async () => {
+  let finishSet;
+  const mounted = await mountPills(routingStatus(), {onSet:async (_input,current) => {
+    await new Promise(resolve => { finishSet = resolve; });
+    current.snapshot.revision = 7;
+    throw Error('stale-selection');
+  }});
+  try {
+    const action = mounted.item('subagent-codex-native-account-id').behavior.onPress;
+    const pending = action();
+    assert.ok(mounted.items().filter(item => item.id.startsWith('subagent-')).every(item => item.disabled));
+    await action();
+    assert.equal(mounted.sets().length, 1);
+    finishSet();
+    await assert.rejects(pending, error => error.message.length < 100 && !error.message.includes('stale-selection'));
+    assert.equal(mounted.calls.filter(call => call.rpc.name.endsWith('.status')).length, 2);
+    assert.equal(mounted.item('subagent-codex-native-account-id').disabled, false);
+    const retry = mounted.item('subagent-codex-native-account-id').behavior.onPress();
+    assert.equal(mounted.sets()[1].input.request.expectedRevision, 7);
+    finishSet(); await assert.rejects(retry);
+  } finally { mounted.stop(); }
+});
+
+test('compiled Pi pill ignores a late poll after saving a newer choice', async () => {
+  let finishRead;
+  const mounted = await mountPills(routingStatus(), {onStatus:async (current,read) => {
+    const status = structuredClone(current);
+    if (read === 2) await new Promise(resolve => {finishRead=resolve;});
+    return status;
+  }});
+  try {
+    const now = Date.now;
+    try { Date.now = () => now()+16_000; mounted.poll(); } finally { Date.now = now; }
+    await mounted.item('subagent-codex-native-account-id').behavior.onPress();
+    finishRead(); await settle();
+    assert.equal(mounted.item('subagent-codex-native-account-id').icon, 'CircleCheck');
+    await mounted.item('subagent-follow').behavior.onPress();
+    assert.equal(mounted.sets()[1].input.request.expectedRevision, 3);
+  } finally { mounted.stop(); }
+});
+
+test('compiled Pi pill ignores status replies after disposal', async () => {
+  let finishRead;
+  const mounted = await mountPills(routingStatus(), {onStatus:current => new Promise(resolve => {finishRead=()=>resolve(current);})});
+  mounted.stop(); finishRead(); await settle();
+  assert.equal(mounted.button, null);
+  assert.equal(mounted.calls.length, 1);
+});
+
+test('compiled Accounts does not render session provider choices', () => {
+  const state = {...sample,subagentSessions:[{agentId:'pi-agent',workspaceId:'workspace',title:'Unique session title',status:'idle'}]};
+  const tree = render(surface.AccountsSurface,{theme:{colors:palettes[0]},layout:{compact:true,platform:'ios'},host:{id:'fixture',label:'Local host'},isFocused:true,store:{...store,getSnapshot:()=>({state,error:null})}});
+  assert.equal(text(tree).includes('Unique session title'), false);
 });
 
 function routingStatus(selection = null) {
-  return { available:true, sessionId:'session', runtimeEpoch:'11111111-1111-4111-8111-111111111111', snapshot:{protocol:1,sessionId:'session',serviceEpoch:'service',revision:2,selection}, providers:['openai','openai-codex'], codexAccounts:[{id:'native-account-id',label:'Work label'}], reason:null };
-}
-function followChoice(tree) {
-  const choices = nodes(tree).filter(node => node.type === 'Pressable');
-  assert.ok(choices.length);
-  return choices[0];
-}
-function pressWith(tree, value) {
-  const button = nodes(tree).find(node => node.type==='Pressable' && text(node).includes(value));
-  assert.ok(button, `missing action containing ${value}`);
-  return button;
+  return { available:true, sessionId:'session', runtimeEpoch:'11111111-1111-4111-8111-111111111111', snapshot:{protocol:1,sessionId:'session',serviceEpoch:'service',revision:2,selection}, providers:['claude-bridge','openai-codex'], codexAccounts:[{id:'native-account-id',label:'Work label'},{id:'second-native-id',label:'Personal label'}], reason:null };
 }
 async function settle() { for (let i=0;i<8;i++) await new Promise(resolve => setImmediate(resolve)); }
-async function mountSubagents(initial, onSet = async () => {}) {
-  const previousEffect = hooks.useEffect;
-  let effects = [], dependencies = [];
-  hooks.useEffect = (effect, deps) => {
-    const index = cursor++;
-    if (!dependencies[index] || deps.some((value, i) => value !== dependencies[index][i])) { dependencies[index] = deps; effects.push(effect); }
+async function mountPills(initial, {family='claude',provider='pi',unrouted=false,onSet=async()=>{},onStatus=async current=>structuredClone(current)} = {}) {
+  const calls = [], listeners = new Set();
+  let current = structuredClone(initial), button = null;
+  const account = {...sample.accounts[0],family,id:family==='pi'?'pi-native:codex:default':'claude-default',status:'ready',isDefault:true,usage:null};
+  const state = {...sample,showComposerPill:true,accounts:[account],providers:{pi:'pi',claude:'claude'},agents:unrouted?[]:[{agentId:'pi-agent',family,accountId:account.id,movable:true,canSwitch:true}]};
+  const client = {
+    rpc:async (rpc,input) => {
+      calls.push({rpc,input});
+      if (rpc.name.endsWith('.status')) return onStatus(current,calls.filter(call=>call.rpc.name.endsWith('.status')).length);
+      await onSet(input,current);
+      current = {...current,snapshot:{...current.snapshot,revision:current.snapshot.revision+1,selection:input.request.selection}};
+      return current.snapshot;
+    },
+    paseo:{agents:{list:async()=>({subscription:{subscribe(observer) { observer.snapshot({entries:[{agent:{id:'pi-agent',workspaceId:'workspace',provider}}],pageInfo:{hasMore:false}}); }}})}},
+    addComposerPill(contribution) { button=contribution.button; return {update(next) {button=next;},remove() {button=null;}}; },
+    openSurface() {},
   };
-  slots = []; cursor = 0;
-  const calls = [];
-  let current = structuredClone(initial);
-  const props = { theme:{colors:palettes[0]}, session:{agentId:'pi-agent',workspaceId:'workspace',title:'Test session',status:'idle'}, store:{rpc:async (rpc,input) => {
-    calls.push({rpc,input});
-    if (rpc.name.endsWith('.status')) return structuredClone(current);
-    await onSet(input,current);
-    current = {...current,snapshot:{...current.snapshot,revision:current.snapshot.revision+1,selection:input.request.selection}};
-    return current.snapshot;
-  }} };
-  const draw = () => render(subagents.SubagentRouting,props,false);
-  let tree = draw();
-  const queued = effects; effects = []; queued.forEach(effect => effect()); await settle(); tree = draw();
-  return { tree, draw, calls, restore:() => { hooks.useEffect = previousEffect; } };
+  const fixtureStore = {current:{state,error:null},subscribe(listener) {listeners.add(listener);return()=>listeners.delete(listener);},refresh:async()=>{},rpc:client.rpc};
+  const stop = pills.contributePills(client,fixtureStore);
+  await settle();
+  const items = () => button?.behavior.items ?? [];
+  return {get button() {return button;},items,item:id=>{const item=items().find(item=>item.id===id);assert.ok(item,`missing ${id}`);return item;},calls,sets:()=>calls.filter(call=>call.rpc.name.endsWith('.set')),poll:()=>listeners.forEach(listener=>listener()),stop};
 }
 
 test('compiled activity, agent and project views retain content and callbacks with native surfaces', () => {
