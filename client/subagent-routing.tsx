@@ -65,7 +65,7 @@ export function SubagentRouting({ theme, session, store }: { theme: Theme; sessi
           {active?.accountId && active.providerId === "openai-codex" && !status.codexAccounts.some(account => account.id === active.accountId)
             ? option(`${active.providerId} · ${active.accountId} (saved)`, true, () => undefined, "saved") : null}
         </View>
-        {error ? <Text style={text.danger}>{error}</Text> : null}
+        {error ? <Text accessibilityRole="alert" style={text.danger}>{error}</Text> : null}
     </View>
   </Card>;
 }
