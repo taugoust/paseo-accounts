@@ -428,7 +428,6 @@ export class NativePiAccounts {
         pi: accountId(stored.codexActive),
       },
       agents: [...base.agents.filter((i) => i.family !== "pi"), ...routes],
-      subagentSessions: targets.map(({ id, workspaceId, title, status }) => ({ agentId: id, workspaceId, title, status })),
       installed: [
         ...new Set([
           ...base.installed.filter((f) => f !== "pi"),

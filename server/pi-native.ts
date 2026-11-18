@@ -16,7 +16,7 @@ import {
   piSwitchResultSchema,
 } from "../shared/pi-native";
 
-interface Descriptor {
+export interface Descriptor {
   version: 1;
   socketPath: string;
   capability: string;
@@ -25,18 +25,24 @@ interface Descriptor {
   runtimeEpoch: string;
   serviceEpoch: string;
 }
-function descriptorPath(agentId: string): string {
+/** Where the bridge publishes account controls. Other relays use subdirectories. */
+export function bridgeDir(): string {
+  return join(homedir(), ".pi", "paseo-bridge");
+}
+
+function descriptorPath(agentId: string, base: string): string {
   return join(
-    homedir(),
-    ".pi",
-    "paseo-bridge",
+    base,
     "operators",
     `${createHash("sha256").update(agentId).digest("hex")}.accounts.json`,
   );
 }
-async function readDescriptor(agentId: string): Promise<unknown> {
+export async function readDescriptor(
+  agentId: string,
+  base = bridgeDir(),
+): Promise<unknown> {
   try {
-    const dir = join(homedir(), ".pi", "paseo-bridge", "operators");
+    const dir = join(base, "operators");
     const ds = await lstat(dir);
     if (
       !ds.isDirectory() ||
@@ -46,7 +52,7 @@ async function readDescriptor(agentId: string): Promise<unknown> {
     )
       return undefined;
     const handle = await open(
-      descriptorPath(agentId),
+      descriptorPath(agentId, base),
       constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
     );
     try {
@@ -66,7 +72,7 @@ async function readDescriptor(agentId: string): Promise<unknown> {
     return undefined;
   }
 }
-function validDescriptor(value: unknown, agentId: string): value is Descriptor {
+export function validDescriptor(value: unknown, agentId: string): value is Descriptor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const d = value as Record<string, unknown>;
   return (
@@ -89,13 +95,25 @@ function validDescriptor(value: unknown, agentId: string): value is Descriptor {
     d.serviceEpoch.length <= 256
   );
 }
-function callBridge(
+export function callBridge(
   d: Descriptor,
   body: Record<string, unknown>,
   timeoutMs = 15_000,
+  wireType = "account_controls",
 ): Promise<unknown> {
   const id = randomUUID();
-  const frame = `${JSON.stringify({ v: 1, type: "account_controls", id, capability: d.capability, agentId: d.agentId, sessionId: d.sessionId, runtimeEpoch: d.runtimeEpoch, serviceEpoch: d.serviceEpoch, request: body })}\n`;
+  const envelope = {
+    v: 1,
+    type: wireType,
+    id,
+    capability: d.capability,
+    agentId: d.agentId,
+    sessionId: d.sessionId,
+    runtimeEpoch: d.runtimeEpoch,
+    serviceEpoch: d.serviceEpoch,
+    request: body,
+  };
+  const frame = `${JSON.stringify(envelope)}\n`;
   if (Buffer.byteLength(frame) > 32 * 1024)
     throw new Error("Oversized account-controls request");
   return new Promise((resolve, reject) => {
@@ -143,7 +161,7 @@ function callBridge(
             if (
               !reply ||
               reply.v !== 1 ||
-              reply.type !== "account_controls" ||
+              reply.type !== wireType ||
               reply.id !== id ||
               typeof reply.success !== "boolean"
             )

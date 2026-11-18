@@ -10,21 +10,36 @@ import {
 } from "../shared/pi-native";
 
 type Agent = { id: string; workspaceId: string; provider: string };
+type Selection = SubagentRoutingSnapshot["selection"];
+
 interface Routing {
 	agent: Agent;
 	status: SubagentRoutingStatus | null;
 	busy: boolean;
 	fetching: boolean;
 	fetchedAt: number;
+	/** Bumped on every refresh, so a slow older reply can't overwrite a newer one. */
 	generation: number;
-	select(selection: SubagentRoutingSnapshot["selection"]): Promise<void>;
+	select(selection: Selection): Promise<void>;
 }
 
-/** Refresh with the account poller without making status reads trigger another account poll. */
-export function createSubagentRouting(client: PluginClientContext, changed: () => void) {
+const REFRESH_AFTER_MS = 15_000;
+const CLAUDE = "claude-bridge";
+const CODEX = "openai-codex";
+
+/**
+ * Keeps the subagent routing status of each Pi agent. sync() is called by the
+ * account poller, and changed() redraws the pills.
+ */
+export function createSubagentRouting(
+	client: PluginClientContext,
+	changed: () => void,
+) {
 	const sessions = new Map<string, Routing>();
 	let stopped = false;
-	const current = (routing: Routing) => !stopped && sessions.get(routing.agent.id) === routing;
+	const current = (routing: Routing) =>
+		!stopped && sessions.get(routing.agent.id) === routing;
+
 	async function refresh(routing: Routing) {
 		const generation = ++routing.generation;
 		const latest = () => current(routing) && generation === routing.generation;
@@ -45,111 +60,212 @@ export function createSubagentRouting(client: PluginClientContext, changed: () =
 			}
 		}
 	}
+
+	async function select(routing: Routing, selection: Selection) {
+		const status = routing.status;
+		const snapshot = status?.snapshot;
+		const ready =
+			current(routing) &&
+			!routing.busy &&
+			status?.available &&
+			snapshot &&
+			status.runtimeEpoch;
+		if (!ready) return;
+
+		routing.busy = true;
+		changed();
+		try {
+			await client.rpc(subagentRoutingSetRpc, {
+				agentId: routing.agent.id,
+				workspaceId: routing.agent.workspaceId,
+				expectedRuntimeEpoch: status.runtimeEpoch!,
+				request: {
+					expectedSessionId: snapshot.sessionId,
+					expectedServiceEpoch: snapshot.serviceEpoch,
+					expectedRevision: snapshot.revision,
+					selection,
+				},
+			});
+		} catch {
+			throw new Error("Subagent choice could not be saved. Try again.");
+		} finally {
+			// Show what Pi actually saved, whether the change went through or not.
+			await refresh(routing);
+			routing.busy = false;
+			if (current(routing)) changed();
+		}
+	}
+
+	function track(agent: Agent): Routing {
+		const routing: Routing = {
+			agent,
+			status: null,
+			busy: false,
+			fetching: false,
+			fetchedAt: 0,
+			generation: 0,
+			select: (selection) => select(routing, selection),
+		};
+		sessions.set(agent.id, routing);
+		return routing;
+	}
+
 	return {
 		get: (agentId: string) => sessions.get(agentId),
+
 		sync(agents: Iterable<Agent>) {
-			const active = new Map([...agents].filter(agent => agent.provider === "pi").map(agent => [agent.id, agent]));
-			for (const [id, routing] of sessions) {
-				if (active.get(id)?.workspaceId !== routing.agent.workspaceId) sessions.delete(id);
+			const piAgents = new Map<string, Agent>();
+			for (const agent of agents) {
+				if (agent.provider === "pi") piAgents.set(agent.id, agent);
 			}
-			for (const agent of active.values()) {
-				let routing = sessions.get(agent.id);
-				if (!routing) {
-					const entry: Routing = {
-						agent, status: null, busy: false, fetching: false, fetchedAt: 0, generation: 0,
-						async select(selection) {
-							const status = entry.status;
-							if (!current(entry) || entry.busy || !status?.available || !status.snapshot || !status.runtimeEpoch) return;
-							entry.busy = true;
-							changed();
-							try {
-								await client.rpc(subagentRoutingSetRpc, {
-									agentId: agent.id, workspaceId: agent.workspaceId,
-									expectedRuntimeEpoch: status.runtimeEpoch,
-									request: {
-										expectedSessionId: status.snapshot.sessionId,
-										expectedServiceEpoch: status.snapshot.serviceEpoch,
-										expectedRevision: status.snapshot.revision, selection,
-									},
-								});
-							} catch {
-								throw new Error("Subagent choice could not be saved. Try again.");
-							} finally {
-								await refresh(entry);
-								entry.busy = false;
-								if (current(entry)) changed();
-							}
-						},
-					};
-					sessions.set(agent.id, entry);
-					routing = entry;
+			// Forget agents that are gone or moved to another workspace.
+			for (const [id, routing] of sessions) {
+				if (piAgents.get(id)?.workspaceId !== routing.agent.workspaceId) {
+					sessions.delete(id);
 				}
-				if (!routing.fetching && !routing.busy && Date.now() - routing.fetchedAt >= 15_000) void refresh(routing);
+			}
+			for (const agent of piAgents.values()) {
+				const routing = sessions.get(agent.id) ?? track(agent);
+				const stale = Date.now() - routing.fetchedAt >= REFRESH_AFTER_MS;
+				if (!routing.fetching && !routing.busy && stale) void refresh(routing);
 			}
 		},
-		stop() { stopped = true; sessions.clear(); },
+
+		stop() {
+			stopped = true;
+			sessions.clear();
+		},
 	};
 }
 
-/** The pill shows one provider name, or Mixed when subagents run on a different provider than the session. */
+function providerName(providerId: string): string {
+	if (providerId === CLAUDE) return "Claude";
+	if (providerId === CODEX) return "Codex";
+	return providerId;
+}
+
+/**
+ * The provider shown on the pill. It is the session's provider while subagents
+ * use it too, and Mixed when they run on another one.
+ */
 export function pillProviderName(sessionName: string, routing?: Routing): string {
 	const selection = routing?.status?.snapshot?.selection;
 	if (!selection) return sessionName;
 	return providerName(selection.providerId) === sessionName ? sessionName : "Mixed";
 }
 
-function providerName(providerId: string): string {
-	return providerId === "claude-bridge" ? "Claude" : providerId === "openai-codex" ? "Codex" : providerId;
-}
-
-export function subagentSuffix(routing?: Routing, compact = false): string {
+/** Added to the pill's title, so hovering shows where subagents run. */
+export function subagentSuffix(routing?: Routing): string {
 	const selection = routing?.status?.snapshot?.selection;
 	if (!selection) return "";
 	const provider = providerName(selection.providerId);
-	const account = routing?.status?.codexAccounts.find(account => account.id === selection.accountId);
-	return ` · Subagents ${provider}${!compact && selection.accountId ? ` (${account?.label ?? selection.accountId})` : ""}`;
+	if (!selection.accountId) return ` · Subagents ${provider}`;
+	const accounts = routing?.status?.codexAccounts ?? [];
+	const account = accounts.find((entry) => entry.id === selection.accountId);
+	return ` · Subagents ${provider} (${account?.label ?? selection.accountId})`;
 }
 
 /** Names of the accounts each provider's default login uses, when known. */
-export interface DefaultLogins { claude?: string; codex?: string }
+export interface DefaultLogins {
+	claude?: string;
+	codex?: string;
+}
 
-/** sessionTitle names the account the session runs on, which subagents use when they follow it. */
-export function subagentMenu(routing?: Routing, sessionTitle = "Same as session", defaults: DefaultLogins = {}): PluginButtonMenuEntry[] {
+interface Choice {
+	id: string;
+	title: string;
+	selection: Selection;
+}
+
+function sameSelection(a: Selection, b: Selection): boolean {
+	return (
+		(a?.providerId ?? null) === (b?.providerId ?? null) &&
+		(a?.accountId ?? null) === (b?.accountId ?? null)
+	);
+}
+
+function routingChoices(
+	status: SubagentRoutingStatus,
+	sessionTitle: string,
+	defaults: DefaultLogins,
+): Choice[] {
+	const choices: Choice[] = [{ id: "follow", title: sessionTitle, selection: null }];
+	if (status.providers.includes(CLAUDE)) {
+		choices.push({
+			id: "claude",
+			title: `Claude (${defaults.claude ?? "default login"})`,
+			selection: { providerId: CLAUDE, accountId: null },
+		});
+	}
+	if (status.providers.includes(CODEX)) {
+		choices.push({
+			id: "codex",
+			title: `Codex (${defaults.codex ?? "default login"})`,
+			selection: { providerId: CODEX, accountId: null },
+		});
+		for (const account of status.codexAccounts) {
+			choices.push({
+				id: `codex-${account.id}`,
+				title: `Codex (${account.label})`,
+				selection: { providerId: CODEX, accountId: account.id },
+			});
+		}
+	}
+
+	// A removed login stays the saved choice until the user picks another one.
+	const active = status.snapshot?.selection ?? null;
+	const listed = choices.some((choice) => sameSelection(choice.selection, active));
+	if (active?.providerId === CODEX && active.accountId && !listed) {
+		choices.push({ id: "saved", title: `Codex (${active.accountId})`, selection: active });
+	}
+	return choices;
+}
+
+/**
+ * Several choices can name the same account, such as a default login and the
+ * session's own. Keeps one per name, preferring the saved choice so its check
+ * stays visible.
+ */
+function onePerName(choices: Choice[], active: Selection): Choice[] {
+	return choices.filter((choice, index) => {
+		const twins = choices.filter((other) => other.title === choice.title);
+		const activeTwin = twins.find((other) => sameSelection(other.selection, active));
+		if (activeTwin) return activeTwin === choice;
+		return choices.indexOf(twins[0]!) === index;
+	});
+}
+
+/**
+ * The Subagents section of the pill menu.
+ * sessionTitle names the session's own account, which subagents follow by default.
+ */
+export function subagentMenu(
+	routing?: Routing,
+	sessionTitle = "Same as session",
+	defaults: DefaultLogins = {},
+): PluginButtonMenuEntry[] {
 	const status = routing?.status;
 	if (!routing || !status?.available || !status.snapshot) return [];
 	const active = status.snapshot.selection;
-	const choices = [
-		{ id: "follow", title: sessionTitle, selection: null },
-		...(status.providers.includes("claude-bridge") ? [{ id: "claude", title: `Claude (${defaults.claude ?? "default login"})`, selection: { providerId: "claude-bridge", accountId: null } }] : []),
-		...(status.providers.includes("openai-codex") ? [
-			{ id: "codex", title: `Codex (${defaults.codex ?? "default login"})`, selection: { providerId: "openai-codex", accountId: null } },
-			...status.codexAccounts.map(account => ({ id: `codex-${account.id}`, title: `Codex (${account.label})`, selection: { providerId: "openai-codex", accountId: account.id } })),
-		] : []),
-	];
-	// A removed login is still the saved route until the user chooses another one.
-	if (active?.providerId === "openai-codex" && active.accountId && !choices.some(choice => choice.selection?.providerId === active.providerId && choice.selection.accountId === active.accountId)) {
-		choices.push({ id: "saved", title: `Codex (${active.accountId})`, selection: { providerId: active.providerId, accountId: active.accountId } });
-	}
-	// Several choices can name the same account, such as a default login and the session's own.
-	// Show each name once, keeping the saved choice so its check stays visible.
-	const isActive = (choice: typeof choices[number]) =>
-		(active?.providerId ?? null) === (choice.selection?.providerId ?? null) && (active?.accountId ?? null) === (choice.selection?.accountId ?? null);
-	const shown = choices.filter((choice, index) => {
-		const twin = choices.findIndex(other => other.title === choice.title);
-		const activeTwin = choices.find(other => other.title === choice.title && isActive(other));
-		return activeTwin ? activeTwin === choice : twin === index;
+	const choices = onePerName(routingChoices(status, sessionTitle, defaults), active);
+
+	const heading: PluginButtonMenuEntry = {
+		kind: "item",
+		id: "subagents-heading",
+		title: "Subagents",
+		disabled: true,
+		behavior: { kind: "action", onPress() {} },
+	};
+	const items = choices.map((choice): PluginButtonMenuEntry => {
+		const selected = sameSelection(choice.selection, active);
+		return {
+			kind: "item",
+			id: `subagent-${choice.id}`,
+			title: choice.title,
+			icon: selected ? "CircleCheck" : "Circle",
+			disabled: routing.busy || selected,
+			behavior: { kind: "action", onPress: () => routing.select(choice.selection) },
+		};
 	});
-	return [
-		{ kind: "separator", id: "subagents-divider" },
-		{ kind: "item", id: "subagents-heading", title: "Subagents", disabled: true, behavior: { kind: "action", onPress() {} } },
-		...shown.map(choice => {
-			const selected = (active?.providerId ?? null) === (choice.selection?.providerId ?? null) && (active?.accountId ?? null) === (choice.selection?.accountId ?? null);
-			return {
-				kind: "item" as const, id: `subagent-${choice.id}`, title: choice.title,
-				icon: selected ? "CircleCheck" : "Circle",
-				disabled: routing.busy || selected,
-				behavior: { kind: "action" as const, onPress: () => routing.select(choice.selection) },
-			};
-		}),
-	];
+	return [{ kind: "separator", id: "subagents-divider" }, heading, ...items];
 }

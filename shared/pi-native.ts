@@ -124,31 +124,66 @@ export const accountControlsSwitchRpc = defineRpc({
     .strict(),
   output: piSwitchResultSchema,
 });
-const subagentSelection = z.object({
-  providerId: z.string().min(1).max(128),
-  accountId: z.string().min(1).max(256).nullable(),
-}).strict().nullable();
-export const subagentSnapshotSchema = z.object({
-  protocol: z.literal(1),
-  sessionId: z.string().min(1).max(256),
-  serviceEpoch: z.string().min(1).max(256),
-  revision: z.number().int().nonnegative(),
-  selection: subagentSelection,
-}).strict();
+// Pi's subagent provider setting, relayed by paseo-bridge-pi (protocol 1).
+const subagentIdentity = z.string().min(1).max(256);
+const subagentSelection = z
+  .object({
+    providerId: z.string().min(1).max(128),
+    /** null selects the provider's default login. */
+    accountId: subagentIdentity.nullable(),
+  })
+  .strict()
+  .nullable();
+export const subagentSnapshotSchema = z
+  .object({
+    protocol: z.literal(1),
+    sessionId: subagentIdentity,
+    serviceEpoch: subagentIdentity,
+    revision: z.number().int().nonnegative(),
+    /** null follows the session. */
+    selection: subagentSelection,
+  })
+  .strict();
+export type SubagentRoutingSnapshot = z.infer<typeof subagentSnapshotSchema>;
+
+const subagentTarget = { agentId: subagentIdentity, workspaceId: subagentIdentity };
+const subagentStatusSchema = z
+  .object({
+    available: z.boolean(),
+    sessionId: z.string().nullable(),
+    runtimeEpoch: z.string().uuid().nullable(),
+    snapshot: subagentSnapshotSchema.nullable(),
+    /** Providers the user is logged in to. */
+    providers: z.array(z.string().min(1).max(128)).max(256),
+    codexAccounts: z
+      .array(z.object({ id: subagentIdentity, label: subagentIdentity }).strict())
+      .max(100),
+    reason: z.string().max(200).nullable(),
+  })
+  .strict();
+export type SubagentRoutingStatus = z.infer<typeof subagentStatusSchema>;
+
 export const subagentRoutingStatusRpc = defineRpc({
   name: "paseo-accounts.pi.subagent-routing.status",
-  input: z.object({ agentId: z.string().min(1).max(256), workspaceId: z.string().min(1).max(256) }).strict(),
-  output: z.object({ available: z.boolean(), sessionId: z.string().nullable(), runtimeEpoch: z.string().uuid().nullable(), snapshot: subagentSnapshotSchema.nullable(), providers: z.array(z.string().min(1).max(128)).max(256), codexAccounts: z.array(z.object({ id: z.string().min(1).max(256), label: z.string().min(1).max(256) }).strict()).max(100), reason: z.string().max(200).nullable() }).strict(),
+  input: z.object(subagentTarget).strict(),
+  output: subagentStatusSchema,
 });
-export type SubagentRoutingSnapshot = z.infer<typeof subagentSnapshotSchema>;
-export type SubagentRoutingStatus = { available: boolean; sessionId: string | null; runtimeEpoch: string | null; snapshot: SubagentRoutingSnapshot | null; providers: string[]; codexAccounts: { id: string; label: string }[]; reason: string | null };
 export const subagentRoutingSetRpc = defineRpc({
   name: "paseo-accounts.pi.subagent-routing.set",
-  input: z.object({
-    agentId: z.string().min(1).max(256), workspaceId: z.string().min(1).max(256),
-    expectedRuntimeEpoch: z.string().uuid(),
-    request: z.object({ expectedSessionId: z.string().min(1).max(256), expectedServiceEpoch: z.string().min(1).max(256), expectedRevision: z.number().int().nonnegative(), selection: subagentSelection }).strict(),
-  }).strict(),
+  input: z
+    .object({
+      ...subagentTarget,
+      expectedRuntimeEpoch: z.string().uuid(),
+      request: z
+        .object({
+          expectedSessionId: subagentIdentity,
+          expectedServiceEpoch: subagentIdentity,
+          expectedRevision: z.number().int().nonnegative(),
+          selection: subagentSelection,
+        })
+        .strict(),
+    })
+    .strict(),
   output: subagentSnapshotSchema,
 });
 export const piAccountManageRpc = defineRpc({
