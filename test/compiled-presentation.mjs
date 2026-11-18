@@ -173,8 +173,13 @@ test('compiled Pi pill on Codex offers the default Claude login by name', async 
     assert.ok(choices.some(item => item.id === 'subagent-claude'));
     assert.equal(choices.some(item => item.id === 'subagent-codex'), false, 'the session already names the default Codex login');
     assert.equal(new Set(choices.map(item => item.title)).size, choices.length);
+    const base = mounted.button.label;
+    await mounted.item('subagent-codex-native-account-id').behavior.onPress();
+    assert.equal(mounted.button.label, base, 'subagents on the same provider keep the provider name');
     await mounted.item('subagent-claude').behavior.onPress();
-    assert.deepEqual(mounted.sets()[0].input.request.selection, {providerId:'claude-bridge',accountId:null}, 'Claude only supports its default login');
+    assert.deepEqual(mounted.sets()[1].input.request.selection, {providerId:'claude-bridge',accountId:null}, 'Claude only supports its default login');
+    assert.notEqual(mounted.button.label, base, 'subagents on another provider mark the pill as mixed');
+    assert.ok(mounted.button.title.includes('Claude'), 'the title still names the subagent provider');
   } finally { mounted.stop(); }
 });
 

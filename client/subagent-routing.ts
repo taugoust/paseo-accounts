@@ -91,10 +91,21 @@ export function createSubagentRouting(client: PluginClientContext, changed: () =
 	};
 }
 
+/** The pill shows one provider name, or Mixed when subagents run on a different provider than the session. */
+export function pillProviderName(sessionName: string, routing?: Routing): string {
+	const selection = routing?.status?.snapshot?.selection;
+	if (!selection) return sessionName;
+	return providerName(selection.providerId) === sessionName ? sessionName : "Mixed";
+}
+
+function providerName(providerId: string): string {
+	return providerId === "claude-bridge" ? "Claude" : providerId === "openai-codex" ? "Codex" : providerId;
+}
+
 export function subagentSuffix(routing?: Routing, compact = false): string {
 	const selection = routing?.status?.snapshot?.selection;
 	if (!selection) return "";
-	const provider = selection.providerId === "claude-bridge" ? "Claude" : selection.providerId === "openai-codex" ? "Codex" : selection.providerId;
+	const provider = providerName(selection.providerId);
 	const account = routing?.status?.codexAccounts.find(account => account.id === selection.accountId);
 	return ` · Subagents ${provider}${!compact && selection.accountId ? ` (${account?.label ?? selection.accountId})` : ""}`;
 }

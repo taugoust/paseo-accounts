@@ -18,7 +18,7 @@ import { setAgentAccount } from "../shared/rpc";
 import { forkPopover } from "./fork-confirm";
 import { resetPopover } from "./reset-confirm";
 import type { AccountsStore } from "./store";
-import { createSubagentRouting, subagentMenu, subagentSuffix } from "./subagent-routing";
+import { createSubagentRouting, pillProviderName, subagentMenu, subagentSuffix } from "./subagent-routing";
 
 /** The most agents Paseo returns per page. */
 const PAGE_SIZE = 200;
@@ -198,11 +198,11 @@ function buttonFor(
 	// Pi agents always get a pill, also when they run on Claude's accounts.
 	const piAgent = agent.provider === "pi";
 	const suffix = piAgent ? subagentSuffix(routing) : "";
-	const labelSuffix = piAgent ? subagentSuffix(routing, true) : "";
+	const name = (session: string) => piAgent ? pillProviderName(session, routing) : session;
 	const routingOnly = (): PluginButton | null => {
 		const items = piAgent ? subagentMenu(routing) : [];
 		return items.length === 0 ? null : {
-		title: `Pi${suffix}`, label: `Pi${labelSuffix}`, icon: "CircleUserRound",
+		title: `Pi${suffix}`, label: name("Pi"), icon: "CircleUserRound",
 		behavior: { kind: "menu", items },
 		};
 	};
@@ -308,7 +308,7 @@ function buttonFor(
 		return {
 			title: `Account ${current.label}${suffix}`,
 			icon: "CircleUserRound",
-			label: `${nativePillProvider(current.id) ?? familyLabel(family)}${labelSuffix}`,
+			label: name(nativePillProvider(current.id) ?? familyLabel(family)),
 			behavior: { kind: "menu", items },
 		};
 	}
@@ -371,7 +371,7 @@ function buttonFor(
 		title: `Account ${current.label}${current.email && current.email !== current.label ? ` (${current.email})` : ""}${suffix}`,
 		icon: current.status === "limited" ? "CircleAlert" : "CircleUserRound",
 		// Only the provider, to keep the pill small. The account name is in the title and the menu.
-		label: `${(isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family)}${pending}${labelSuffix}`,
+		label: `${name((isPi ? nativePillProvider(current.id) : null) ?? familyLabel(family))}${pending}`,
 		behavior: { kind: "menu", items },
 	};
 }
