@@ -34,6 +34,17 @@ it("reads session snapshot and physical provider catalogue over independent rout
   expect(requests.map(frame => frame.type)).toEqual(["subagent_routing", "subagent_routing"]);
   expect(requests.map(frame => frame.request.operation).sort()).toEqual(["providers", "snapshot"]);
 });
+it("rejects a Pi agent target that changes while provider data is loading", async () => {
+  let refreshes = 0;
+  const changingContext = { paseo: { agents: { ref: () => ({ refresh: async () => {
+    refreshes++;
+    return { agent: { id: refreshes === 1 ? agentId : "other-agent", workspaceId: "workspace", provider: "pi" } };
+  } }) } } } as never;
+  const result = await createSubagentRoutingHandlers().status({ agentId, workspaceId: "workspace" }, changingContext);
+  expect(result.available).toBe(false);
+  expect(refreshes).toBe(2);
+});
+
 it("sets selection with the checked session routing identity", async () => {
   const result = await createSubagentRoutingHandlers().set({ agentId, workspaceId: "workspace", expectedRuntimeEpoch: runtimeEpoch, request: { expectedSessionId: "session", expectedServiceEpoch: "service", expectedRevision: 2, selection: { providerId: "openai", accountId: null } } }, context);
   expect(result).toMatchObject({ revision: 3, selection: { providerId: "openai", accountId: null } });

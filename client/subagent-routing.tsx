@@ -48,7 +48,7 @@ export function SubagentRouting({ theme, session, store }: { theme: Theme; sessi
   ]);
   if (!status?.available) return null;
   const option = (label: string, selected: boolean, onPress: () => void, key: string) => (
-    <Pressable key={key} accessibilityRole="button" accessibilityState={{ selected, disabled: busy }} onPress={onPress} style={{ paddingVertical: 7, paddingHorizontal: 9, borderRadius: 6, borderWidth: 1, borderColor: selected ? colors.accent : colors.border, opacity: busy ? 0.55 : 1 }}>
+    <Pressable key={key} disabled={busy} accessibilityRole="button" accessibilityState={{ selected, disabled: busy }} onPress={onPress} style={{ paddingVertical: 7, paddingHorizontal: 9, borderRadius: 6, borderWidth: 1, borderColor: selected ? colors.accent : colors.border, opacity: busy ? 0.55 : 1 }}>
       <Text style={[text.small, { color: selected ? colors.foreground : colors.foregroundMuted }]}>{selected ? `✓ ${label}` : label}</Text>
     </Pressable>
   );
@@ -60,7 +60,7 @@ export function SubagentRouting({ theme, session, store }: { theme: Theme; sessi
           {option("Follow session", !active, () => void select(null), "follow")}
           {choices.map((choice) => {
             const label = `${choice.providerId} · ${choice.label}`;
-            return option(label, active?.providerId === choice.providerId && active?.accountId === choice.accountId, () => void select(choice), `${choice.providerId}:${choice.accountId ?? "default"}`);
+            return option(label, active?.providerId === choice.providerId && active?.accountId === choice.accountId, () => void select({ providerId: choice.providerId, accountId: choice.accountId }), `${choice.providerId}:${choice.accountId ?? "default"}`);
           })}
           {active?.accountId && active.providerId === "openai-codex" && !status.codexAccounts.some(account => account.id === active.accountId)
             ? option(`${active.providerId} · ${active.accountId} (saved)`, true, () => undefined, "saved") : null}

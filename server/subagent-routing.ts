@@ -91,6 +91,7 @@ export function createSubagentRoutingHandlers() {
         }
         const finalDescriptor = await readDescriptor(input.agentId);
         if (!same(finalDescriptor, d)) throw new Error("stale-session");
+        await validate(input, context);
         return { available: true, sessionId: d.sessionId, runtimeEpoch: d.runtimeEpoch, snapshot: parsedSnapshot, providers: providers as string[], codexAccounts, reason: null };
       } catch (error) {
         return { available: false, sessionId: d.sessionId, runtimeEpoch: d.runtimeEpoch, snapshot: null, providers: [], codexAccounts: [], reason: shortError(error) };

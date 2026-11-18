@@ -144,7 +144,7 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
                 { id: "settings", label: "Settings" },
               ]}
             />
-            {tab === "accounts" ? state.subagentSessions.map((session) => (
+            {tab === "accounts" ? state.subagentSessions?.map((session) => (
               <SubagentRouting key={`subagents:${session.agentId}`} theme={theme} session={session} store={store} />
             )) : null}
             {tab === "accounts"
