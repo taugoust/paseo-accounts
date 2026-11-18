@@ -2157,6 +2157,7 @@ export class Service {
 		return {
 			accounts,
 			agents: routes,
+      subagentSessions: [],
 			logins: [...this.logins.values()].map((login) => login.view),
 			activity: await this.activity.list(),
 			nextUp,

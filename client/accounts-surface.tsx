@@ -10,6 +10,7 @@ import { AddAccountModal } from "./add-account";
 import { AgentsTab } from "./agents-tab";
 import { CapacityStrip } from "./capacity";
 import { ProjectsTab } from "./projects-tab";
+import { SubagentRouting } from "./subagent-routing";
 import { PreferenceSections } from "./settings-screen";
 import { shownFamilies, useStore, VISIBLE_POLL_MS, type AccountsStore } from "./store";
 import { Button, Card, IconButton, Tabs, useText } from "./ui";
@@ -143,6 +144,9 @@ export function AccountsSurface(props: PluginSurfaceProps & { store: AccountsSto
                 { id: "settings", label: "Settings" },
               ]}
             />
+            {tab === "accounts" ? state.subagentSessions.map((session) => (
+              <SubagentRouting key={`subagents:${session.agentId}`} theme={theme} session={session} store={store} />
+            )) : null}
             {tab === "accounts"
               ? accountFamilies.map((family) => (
                   <ProviderGroup

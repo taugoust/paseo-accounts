@@ -216,6 +216,7 @@ export type LoginView = z.infer<typeof LoginViewSchema>;
 export const StateViewSchema = z.object({
 	accounts: z.array(AccountViewSchema),
 	agents: z.array(AgentRouteSchema),
+  subagentSessions: z.array(z.object({ agentId: z.string(), workspaceId: z.string(), title: z.string().nullable(), status: z.string() })).default([]),
 	logins: z.array(LoginViewSchema),
 	/** Recent account switches across every agent, newest first. */
 	activity: z
