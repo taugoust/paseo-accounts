@@ -16,13 +16,16 @@ export interface StoreSnapshot {
   error: string | null;
 }
 
+// Same as PluginWireInput in @getpaseo/plugin 0.18, which the package root doesn't export.
+type WireInput<Value> = Value extends Uint8Array ? Uint8Array : Value;
+
 export interface AccountsStore {
   start(): void;
   stop(): void;
   /** Calls a daemon handler, then refreshes state so every view sees the result. */
   rpc<InputSchema extends ZodType, OutputSchema extends ZodType>(
     contract: PluginRpcContract<InputSchema, OutputSchema>,
-    input: ZodInput<InputSchema>,
+    input: WireInput<ZodInput<InputSchema>>,
   ): Promise<ZodOutput<OutputSchema>>;
   readonly current: StoreSnapshot;
   subscribe(listener: () => void): () => void;
