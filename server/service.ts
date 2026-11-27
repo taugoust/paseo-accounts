@@ -41,6 +41,7 @@ import {
 	type LoginHandle,
 	type RedeemReply,
 	type UsageRead,
+	type TurnEvent,
 } from "./adapter";
 import { ActivityLog } from "./activity";
 import { sendAlert } from "./alerts";
@@ -615,24 +616,25 @@ export class Service {
 		const bridged =
 			(await this.families.resolve(context.paseo))[event.agent.provider] === "pi";
 		if (!bridged && event.outcome.kind !== "canceled") {
-			const hit = adapter.detectLimit(event);
+			const turn = await this.turnEvent(context.paseo, agentId, event);
+			const hit = adapter.detectLimit(turn);
 			if (hit)
 				return this.handleUnavailable(
 					context.paseo,
 					agentId,
 					family,
-					event.timeline,
+					turn.timeline,
 					{ kind: "limit", hit },
 				);
 			if (
-				adapter.detectSignOut(event) &&
+				adapter.detectSignOut(turn) &&
 				(await this.confirmSignedOut(agentId, family))
 			) {
 				return this.handleUnavailable(
 					context.paseo,
 					agentId,
 					family,
-					event.timeline,
+					turn.timeline,
 					{ kind: "signed_out" },
 				);
 			}
@@ -653,6 +655,34 @@ export class Service {
 		await this.store.update((draft) => {
 			delete draft.sessions[agentId];
 		});
+	}
+
+	/** Builds the detector input from the current turn's fresh timeline page. */
+	private async turnEvent(
+		paseo: PaseoApi,
+		agentId: string,
+		event: TurnEnded,
+	): Promise<TurnEvent> {
+		if (event.turnId === null) {
+			return { outcome: event.outcome, timeline: [], turnId: event.turnId };
+		}
+		try {
+			const page = await paseo.agents.ref(agentId).timeline.refetch({
+				direction: "tail",
+				limit: 1,
+				wholeTurns: true,
+			});
+			return {
+				outcome: event.outcome,
+				timeline: page.entries
+					.filter((entry) => entry.turnId === event.turnId)
+					.map((entry) => entry.item),
+				turnId: event.turnId,
+			};
+		} catch (error) {
+			log(`could not read the current turn timeline for ${agentId}`, error);
+			return { outcome: event.outcome, timeline: [], turnId: event.turnId };
+		}
 	}
 
 	/** Re-checks the account an agent was using; true when it really is signed out now. */
