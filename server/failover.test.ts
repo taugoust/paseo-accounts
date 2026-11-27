@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginHookAgent } from "@getpaseo/plugin/server";
 import type { AgentTimelineItem, FamilyAdapter, LimitHit, UsageRead } from "./adapter";
 import type { FamilyResolver } from "./families";
 import { detectClaudeLimit } from "./limits";
@@ -13,6 +14,19 @@ import { preferences } from "../shared/preferences";
 const MAIN = MAIN_ACCOUNT_ID.claude;
 const HELLO = "claude-hello";
 const AGENT = "agent-1";
+
+function hookAgent(provider = "claude"): PluginHookAgent {
+  return {
+    id: AGENT,
+    workspaceId: null,
+    parentAgentId: null,
+    provider,
+    cwd: "/tmp",
+    title: null,
+    background: false,
+    metadata: {},
+  };
+}
 
 let root: string;
 let previousHome: string | undefined;
@@ -58,6 +72,8 @@ function claudeAdapter(hit: () => LimitHit): FamilyAdapter {
 function fakePaseo() {
   const sent: string[] = [];
   const notes: Array<{ from: string | null; to: string; outcome: string; detail: string | null }> = [];
+  let entries: Array<{ turnId?: string; item: AgentTimelineItem }> = [];
+  const refetch = vi.fn(async () => ({ entries }));
   const agent = { id: AGENT, provider: "claude", status: "idle", archivedAt: null, lastUserMessageAt: "2026-09-23T07:00:00.000Z" };
   const paseo = {
     config: { get: async () => ({ config: { providers: {} } }) },
@@ -69,12 +85,20 @@ function fakePaseo() {
         timeline: {
           append: async (item: { data: { from: string | null; to: string; outcome: string; detail: string | null } }) =>
             void notes.push(item.data),
-          refetch: async () => ({ entries: [] }),
+          refetch,
         },
       }),
     },
   };
-  return { paseo, sent, notes };
+  return {
+    paseo,
+    sent,
+    notes,
+    setTimeline: (next: Array<{ turnId?: string; item: AgentTimelineItem }>) => {
+      entries = next;
+    },
+    refetch,
+  };
 }
 
 interface SetUpOptions {
@@ -118,10 +142,28 @@ async function setUp(state: Partial<StoredState>, hit: () => LimitHit, options: 
   service.setPreferences(SWITCHING);
   const limitTurn = () =>
     service.onTurnEnded(
-      { agent: { id: AGENT, provider: "claude" }, turnId: "t", outcome: { kind: "failed", error: { message: "limit" } }, timeline: [] } as never,
+      {
+        agent: hookAgent(),
+        turnId: "t",
+        outcome: { kind: "failed", error: { message: "limit" } },
+      },
       context,
     );
   return { service, store, reopened, limitTurn, ...fake };
+}
+
+function setUpRealTimelineDetector() {
+  return setUp(
+    {
+      accounts: [account(MAIN, "marketing", "main"), account(HELLO, "hello", "managed")] as never,
+      defaults: { claude: MAIN, codex: null },
+      sessions: {},
+    },
+    () => {
+      throw new Error("unused: the real detector reads the turns");
+    },
+    { detectLimit: detectClaudeLimit },
+  );
 }
 
 const SWITCHING = preferences.schema.parse({ autoSwitch: true });
@@ -131,7 +173,7 @@ const inPast = () => new Date(Date.now() - 60_000).toISOString();
 describe("failover", () => {
   it("blames the CLI login for a session the plugin never routed, even when the agent is bound elsewhere", async () => {
     // Today's incident: the agent's session predates the plugin, and a switch to "hello" was waiting.
-    const { store, reopened, sent, notes, limitTurn } = await setUp(
+    const { store, reopened, sent, notes, limitTurn, refetch } = await setUp(
       {
         accounts: [account(MAIN, "marketing", "main"), account(HELLO, "hello", "managed")] as never,
         defaults: { claude: MAIN, codex: null },
@@ -140,6 +182,7 @@ describe("failover", () => {
       },
       () => ({ kind: "window", resetsAt: inFuture(), message: "You've hit your session limit" }),
     );
+    refetch.mockRejectedValueOnce(new Error("timeline unavailable"));
     await limitTurn();
     const state = await store.read();
     expect(state.accounts.find((a) => a.id === MAIN)?.limitedUntil).not.toBeNull();
@@ -183,43 +226,88 @@ describe("failover", () => {
     expect(notes.at(-1)?.detail).toMatch(/stopped switching it for now/);
   });
 
-  it("doesn't blame the new account for the old one's limit when a message fails before its turn starts", async () => {
-    // A real incident: marketing's weekly limit moved the agent to hello, then a message hit a closed
-    // session. Paseo never started that turn, so the timeline still ended with marketing's notice.
-    const notice = "You've hit your weekly limit · resets Sep 25 at 3:30pm (Asia/Calcutta)";
-    const { service, store, reopened, notes, paseo } = await setUp(
-      {
-        accounts: [account(MAIN, "marketing", "main"), account(HELLO, "hello", "managed")] as never,
-        defaults: { claude: MAIN, codex: null },
-        sessions: {},
-      },
-      () => {
-        throw new Error("unused: the real detector reads the turns");
-      },
-      { detectLimit: detectClaudeLimit },
-    );
-    const context = { paseo } as never;
-    const agent = { id: AGENT, provider: "claude" };
-    const earlier: AgentTimelineItem[] = [
+  it("fails over on a completed turn's timeline-only limit notice", async () => {
+    const notice = "You've hit your weekly limit · resets Sep 25 at 3:30pm";
+    const { service, store, reopened, paseo, setTimeline, refetch } =
+      await setUpRealTimelineDetector();
+    const items: AgentTimelineItem[] = [
       { type: "user_message", text: "fix the bug" },
       { type: "assistant_message", text: notice },
     ];
-    await service.onTurnEnded({ agent, turnId: "t1", outcome: { kind: "completed" }, timeline: earlier } as never, context);
-    expect((await store.read()).sessions[AGENT]?.accountId).toBe(HELLO);
+    setTimeline(items.map((item) => ({ turnId: "t1", item })));
 
-    const closed = "Claude session is closed";
+    await service.onTurnEnded(
+      { agent: hookAgent(), turnId: "t1", outcome: { kind: "completed" } },
+      { paseo } as never,
+    );
+
+    expect(refetch).toHaveBeenCalledWith({
+      direction: "tail",
+      limit: 1,
+      wholeTurns: true,
+    });
+    expect(reopened).toEqual([AGENT]);
+    expect((await store.read()).bindings[AGENT]?.accountId).toBe(HELLO);
+  });
+
+  it("ignores limit notices belonging to another turn", async () => {
+    const { service, reopened, paseo, setTimeline, refetch } =
+      await setUpRealTimelineDetector();
+    setTimeline([
+      { turnId: "older", item: { type: "assistant_message", text: "You've hit your limit" } },
+    ]);
+
+    await service.onTurnEnded(
+      { agent: hookAgent(), turnId: "current", outcome: { kind: "completed" } },
+      { paseo } as never,
+    );
+
+    expect(refetch).toHaveBeenCalledWith({
+      direction: "tail",
+      limit: 1,
+      wholeTurns: true,
+    });
+    expect(reopened).toHaveLength(0);
+  });
+
+  it("uses the failed outcome when refetch fails", async () => {
+    const { service, reopened, paseo, refetch } = await setUpRealTimelineDetector();
+    refetch.mockRejectedValueOnce(new Error("timeline unavailable"));
+
     await service.onTurnEnded(
       {
-        agent,
-        turnId: null,
-        outcome: { kind: "failed", error: { message: closed } },
-        timeline: [...earlier, { type: "assistant_message", text: `[System Error] ${closed}` }],
-      } as never,
-      context,
+        agent: hookAgent(),
+        turnId: "failed-turn",
+        outcome: {
+          kind: "failed",
+          error: { message: "You've hit your weekly limit" },
+        },
+      },
+      { paseo } as never,
     );
-    expect((await store.read()).accounts.find((a) => a.id === HELLO)?.limitedUntil).toBeNull();
-    expect(reopened).toHaveLength(1);
-    expect(notes).toHaveLength(1);
+
+    expect(refetch).toHaveBeenCalledWith({
+      direction: "tail",
+      limit: 1,
+      wholeTurns: true,
+    });
+    expect(reopened).toEqual([AGENT]);
+  });
+
+  it("skips timeline refetch when the turn id is null", async () => {
+    const { service, reopened, paseo, refetch } = await setUpRealTimelineDetector();
+
+    await service.onTurnEnded(
+      {
+        agent: hookAgent(),
+        turnId: null,
+        outcome: { kind: "failed", error: { message: "Claude session is closed" } },
+      },
+      { paseo } as never,
+    );
+
+    expect(refetch).not.toHaveBeenCalled();
+    expect(reopened).toHaveLength(0);
   });
 
   it("keeps an agent's session where it was when Paseo can't reload it", async () => {
@@ -339,7 +427,11 @@ describe("forking to the other provider", () => {
     const context = { paseo } as never;
     const limitTurn = () =>
       service.onTurnEnded(
-        { agent: { id: AGENT, provider: "claude" }, turnId: "t", outcome: { kind: "failed", error: { message: "limit" } }, timeline: [] } as never,
+        {
+          agent: hookAgent(),
+          turnId: "t",
+          outcome: { kind: "failed", error: { message: "limit" } },
+        },
         context,
       );
     return { store, created, notes, limitTurn };
@@ -461,7 +553,11 @@ describe("switching early", () => {
   });
   const completedTurn = (service: Service, paseo: unknown) =>
     service.onTurnEnded(
-      { agent: { id: AGENT, provider: "claude" }, turnId: "t", outcome: { kind: "completed" }, timeline: [] } as never,
+      {
+        agent: hookAgent(),
+        turnId: "t",
+        outcome: { kind: "completed" },
+      },
       { paseo } as never,
     );
   const state = {
@@ -614,7 +710,11 @@ describe("forking further down the provider order", () => {
     service.setPreferences(preferences.schema.parse({ autoSwitch: true, forkOtherProvider: true }));
     const limitTurn = () =>
       service.onTurnEnded(
-        { agent: { id: AGENT, provider: "claude" }, turnId: "t", outcome: { kind: "failed", error: { message: "limit" } }, timeline: [] } as never,
+        {
+          agent: hookAgent(),
+          turnId: "t",
+          outcome: { kind: "failed", error: { message: "limit" } },
+        },
         { paseo } as never,
       );
     return { store, service, paseo, created, notes, limitTurn };
